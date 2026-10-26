@@ -26,11 +26,16 @@ if [[ ! -f "${YML}" ]]; then
     echo "ERROR: There is no command ${COMMAND} (${YML})." >&2
     exit 2
 fi
-# The step's script: an install command's install/<tool>/install.sh (its
-# cache_key.sh, rust_cache_key.sh and msrv_cache_key.sh only prepare cache
-# keys), or else its one script.
-SCRIPT=$(grep -oE '<< include\((install/[a-z0-9-]+/install|scripts/[a-z_]+)\.sh\) >>' "${YML}" \
-    | grep -v -e 'scripts/lib/' -e 'scripts/cache_key.sh' -e 'scripts/rust_cache_key.sh' -e 'scripts/msrv_cache_key.sh' | sed -E 's/<< include\((.*)\) >>/\1/' | head -n 1)
+# The step's script, from the command line of its last run step: the steps
+# before it only prepare cache keys (cache_key.sh, rust_cache_key.sh,
+# msrv_cache_key.sh), and other includes are scripts passed to it in its
+# environment, such as msrv's SCRIPT_RUST_INSTALL.
+SCRIPT=$(grep -oE '^ +command: << include\((install/[a-z0-9-]+/install|scripts/[a-z_]+)\.sh\) >>$' "${YML}" \
+    | sed -E 's/^ +command: << include\((.*)\) >>$/\1/' | tail -n 1 || true)
+if [[ -z "${SCRIPT}" ]]; then
+    echo "ERROR: ${COMMAND}.yml has no run step that includes a script." >&2
+    exit 2
+fi
 
 # Every parameter, as NAME<TAB>DEFAULT, without the quotes YAML allows; a
 # parameter without a default has the value "<required>" until it is given.
@@ -62,12 +67,17 @@ for name in "${!VALUES[@]}"; do
     fi
 done
 
+# Each PARAM_ variable once, though a cache key step sets some of them too.
 ENVIRONMENT=()
+declare -A SEEN=()
 while IFS= read -r line; do
     var=${line%%:*}
     name=${line##*parameters.}
     name=${name% >>}
-    ENVIRONMENT+=("${var}=${VALUES[${name}]}")
+    if [[ -z "${SEEN[${var}]+set}" ]]; then
+        SEEN[${var}]=1
+        ENVIRONMENT+=("${var}=${VALUES[${name}]}")
+    fi
 done < <(grep -oE 'PARAM_[A-Z0-9_]+: << parameters\.[a-z0-9_]+ >>' "${YML}")
 
 DIR=${VALUES[working_dir]:-.}

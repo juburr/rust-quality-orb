@@ -15,6 +15,8 @@
 #     names every command's GitHub Action;
 #   - every run step has a name, as orb-tools review's RC008 asks, checked
 #     here too since RC008 takes any key named run for a run step.
+#   - tests/run_command.sh runs each check's own script, with each PARAM_
+#     variable once.
 #
 # Run from a checkout:
 #   bash tests/wiring_test.sh
@@ -147,6 +149,24 @@ for yml in src/commands/*.yml src/jobs/*.yml; do
     while IFS= read -r problem; do
         [[ -n "${problem}" ]] && fail "${yml}:${problem}"
     done < <(unnamed_runs "${yml}")
+done
+
+# tests/run_command.sh, which test-deploy.yml runs the steps that must fail
+# with, picks each check's own script: msrv also includes install.sh, which it
+# passes to its script. /dev/null/none can't be a directory, so the script
+# stops at cd, after naming what it would run.
+for yml in src/commands/*.yml; do
+    grep -q '^  working_dir:$' "${yml}" || continue
+    command=${yml##*/}
+    command=${command%.yml}
+    running=$(bash tests/run_command.sh "${command}" working_dir=/dev/null/none 2> /dev/null | awk 'NR == 1' || true)
+    if [[ "${running}" != "Running scripts/${command}.sh in /dev/null/none with "* ]]; then
+        fail "run_command.sh ${command} doesn't run scripts/${command}.sh: ${running:-it printed nothing}"
+    fi
+    repeated=$(tr ' ' '\n' <<< "${running#* with }" | grep -oE '^PARAM_[A-Z0-9_]+=' | sort | uniq -d | tr -d '=' | tr '\n' ' ' || true)
+    if [[ -n "${repeated}" ]]; then
+        fail "run_command.sh ${command} sets ${repeated% } more than once"
+    fi
 done
 
 # The install command and the per-tool install commands.
