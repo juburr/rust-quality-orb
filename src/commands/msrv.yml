@@ -1,0 +1,195 @@
+description: >
+  Checks that each package builds (cargo check) with the Rust version its
+  Cargo.toml declares as rust-version, its minimum supported Rust version, or
+  with rust_version. The toolchain for it comes from rustup when rustup is on
+  the PATH, or else is installed like install_rust does, verified against this
+  orb's checksum table, into a directory of its own, so the job's toolchain
+  stays first on the PATH. A build that fails on that version is a finding; a
+  toolchain that can't be installed fails the step whatever report_only says.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: >
+      Directory to run in: the root of the Cargo workspace or package, or any
+      directory in it.
+  packages:
+    type: string
+    default: ""
+    description: >
+      Workspace members to check, by package name, separated by commas or
+      spaces. Empty (the default) means every member. Environment variables
+      are expanded.
+  rust_version:
+    type: string
+    default: ""
+    description: >
+      The Rust version to check every selected package with, such as 1.70 or
+      1.70.0. Empty (the default) checks each package with its own
+      rust-version, and skips packages that declare none. Environment
+      variables are expanded.
+  toolchain_source:
+    type: enum
+    enum: ["auto", "rustup", "rust"]
+    default: auto
+    description: >
+      Where the toolchain comes from: rustup (rustup toolchain install), rust
+      (a pinned release, as install_rust installs it, from 1.56.0 on), or
+      auto, which is rustup when rustup is on the PATH and rust otherwise.
+  all_targets:
+    type: boolean
+    default: false
+    description: >
+      Check tests, examples and benchmarks too (--all-targets). Off by
+      default: their dev-dependencies often need a newer Rust than the crate
+      itself.
+  features:
+    type: string
+    default: ""
+    description: >
+      Features to enable, separated by commas or spaces, as cargo's --features
+      takes them (package/feature for a dependency's). Environment variables
+      are expanded.
+  all_features:
+    type: boolean
+    default: false
+    description: >
+      Enable every feature (--all-features).
+  no_default_features:
+    type: boolean
+    default: false
+    description: >
+      Leave the default features off (--no-default-features).
+  locked:
+    type: boolean
+    default: false
+    description: >
+      Pass --locked, so cargo fails instead of changing a Cargo.lock that
+      doesn't match Cargo.toml. Needs a committed Cargo.lock.
+  verify_checksums:
+    type: enum
+    enum: ["false", "known_versions", "strict"]
+    default: strict
+    description: >
+      With toolchain_source rust, SHA-512 verification of the release's
+      manifest against this orb's checksum table, as install_rust does it.
+  download_base_url:
+    type: string
+    default: ""
+    description: >
+      With toolchain_source rust, a mirror of https://static.rust-lang.org to
+      download from, as install_rust's download_base_url. With rustup, set
+      RUSTUP_DIST_SERVER instead.
+  caching:
+    type: boolean
+    default: true
+    description: >
+      With toolchain_source rust, cache the verified toolchain downloads
+      between jobs, keyed by the versions the packages declare.
+  extra_args:
+    type: string
+    default: ""
+    description: >
+      More cargo check arguments, split like shell words. Nothing in them is
+      expanded or run; environment variables are expanded before splitting.
+      --message-format is refused.
+  output_dir:
+    type: string
+    default: /tmp/rust-quality-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  report_name:
+    type: string
+    default: msrv
+    description: >
+      The reports' file name, without extension: <report_name>.json (each
+      version and its packages) and <report_name>-<version>.log (cargo's
+      output), <report_name>.run-record.json and junit/<report_name>.xml. Give
+      each run of this command in a job its own.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Also write JUnit XML, one test case per Rust version, and show it in
+      CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which Cargo.toml and Cargo.lock, with which toolchain and settings, and
+      which versions it checked.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report findings without failing the step, to adopt the check gradually.
+      A toolchain that can't be installed still fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: >
+      Store output_dir as job artifacts under rust-quality-reports/, including
+      when the step fails.
+steps:
+  - when:
+      condition: << parameters.caching >>
+      steps:
+        # With toolchain_source rust, the toolchains are cached by the Rust
+        # versions the packages declare, which this step works out.
+        - run:
+            name: Prepare minimum supported Rust version cache key
+            working_directory: << parameters.working_dir >>
+            environment:
+              ORB_CACHE_KEY_FILE: /tmp/rust-quality-orb-msrv-cache-key
+              PARAM_PACKAGES: << parameters.packages >>
+              PARAM_RUST_VERSION: << parameters.rust_version >>
+            command: << include(scripts/msrv_cache_key.sh) >>
+        - restore_cache:
+            key: rust-quality-orb-msrv-v1-{{ checksum "/tmp/rust-quality-orb-msrv-cache-key" }}
+  - run:
+      name: Minimum supported Rust version
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_ALL_FEATURES: << parameters.all_features >>
+        PARAM_ALL_TARGETS: << parameters.all_targets >>
+        PARAM_CACHING: << parameters.caching >>
+        PARAM_DOWNLOAD_BASE_URL: << parameters.download_base_url >>
+        PARAM_EXTRA_ARGS: << parameters.extra_args >>
+        PARAM_FEATURES: << parameters.features >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_LOCKED: << parameters.locked >>
+        PARAM_NO_DEFAULT_FEATURES: << parameters.no_default_features >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_PACKAGES: << parameters.packages >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        PARAM_RUST_VERSION: << parameters.rust_version >>
+        PARAM_TOOLCHAIN_SOURCE: << parameters.toolchain_source >>
+        PARAM_VERIFY_CHECKSUMS: << parameters.verify_checksums >>
+        SCRIPT_RUST_QUALITY_LIB: << include(scripts/lib/rust_quality.sh) >>
+        SCRIPT_RUST_INSTALL: << include(install/rust/install.sh) >>
+      command: << include(scripts/msrv.sh) >>
+  - when:
+      condition: << parameters.caching >>
+      steps:
+        - save_cache:
+            key: rust-quality-orb-msrv-v1-{{ checksum "/tmp/rust-quality-orb-msrv-cache-key" }}
+            paths:
+              - ~/.cache/rust-quality-orb-rust
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: rust-quality-reports
+            when: always

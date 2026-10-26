@@ -1,0 +1,145 @@
+description: >
+  Runs clippy (cargo clippy) and reports every lint it and rustc find, with
+  SARIF for code scanning: the default lints, those the crates and
+  Cargo.toml's [lints] turn on, and those lint_args adds. Lints run capped at
+  warning level, so one the code denies doesn't stop the build and hide the
+  rest; each lint at any level is a finding. Needs the clippy component. Code
+  that doesn't compile fails the step whatever report_only says.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: >
+      Directory to run in: the root of the Cargo workspace or package, or any
+      directory in it.
+  packages:
+    type: string
+    default: ""
+    description: >
+      Workspace members to check, by package name, separated by commas or
+      spaces. Empty (the default) means every member. Environment variables
+      are expanded.
+  features:
+    type: string
+    default: ""
+    description: >
+      Features to enable, separated by commas or spaces, as cargo's --features
+      takes them (package/feature for a dependency's). Environment variables
+      are expanded.
+  all_features:
+    type: boolean
+    default: false
+    description: >
+      Enable every feature (--all-features).
+  no_default_features:
+    type: boolean
+    default: false
+    description: >
+      Leave the default features off (--no-default-features).
+  all_targets:
+    type: boolean
+    default: true
+    description: >
+      Check tests, examples and benchmarks too (--all-targets), not just
+      libraries and binaries.
+  locked:
+    type: boolean
+    default: false
+    description: >
+      Pass --locked, so cargo fails instead of changing a Cargo.lock that
+      doesn't match Cargo.toml. Needs a committed Cargo.lock.
+  lint_args:
+    type: string
+    default: ""
+    description: >
+      Lint options for clippy and rustc, split like shell words, such as -W
+      clippy::pedantic -A clippy::module_name_repetitions. They go after --,
+      before the --cap-lints warn this command adds, so --cap-lints is
+      refused. Environment variables are expanded.
+  extra_args:
+    type: string
+    default: ""
+    description: >
+      More cargo clippy arguments, split like shell words. Nothing in them is
+      expanded or run; environment variables are expanded before splitting.
+      They go before --, as cargo options. --message-format is refused.
+  output_dir:
+    type: string
+    default: /tmp/rust-quality-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  report_name:
+    type: string
+    default: clippy
+    description: >
+      The reports' file name, without extension: <report_name>.json (the
+      findings), <report_name>.sarif, <report_name>.raw.jsonl (cargo's
+      messages), <report_name>.run-record.json and junit/<report_name>.xml.
+      Give each run of this command in a job its own.
+  sarif:
+    type: boolean
+    default: true
+    description: >
+      Write <report_name>.sarif (SARIF 2.1.0), for code scanning, with each
+      lint linked to its documentation.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Also write JUnit XML, one failing test case per finding, and show it in
+      CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which Cargo.toml and Cargo.lock, with which toolchain and settings, and
+      what it found.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report findings without failing the step, to adopt the check gradually.
+      Code that doesn't compile still fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: >
+      Store output_dir as job artifacts under rust-quality-reports/, including
+      when the step fails.
+steps:
+  - run:
+      name: clippy
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_ALL_FEATURES: << parameters.all_features >>
+        PARAM_ALL_TARGETS: << parameters.all_targets >>
+        PARAM_EXTRA_ARGS: << parameters.extra_args >>
+        PARAM_FEATURES: << parameters.features >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_LINT_ARGS: << parameters.lint_args >>
+        PARAM_LOCKED: << parameters.locked >>
+        PARAM_NO_DEFAULT_FEATURES: << parameters.no_default_features >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_PACKAGES: << parameters.packages >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        PARAM_SARIF: << parameters.sarif >>
+        SCRIPT_RUST_QUALITY_LIB: << include(scripts/lib/rust_quality.sh) >>
+      command: << include(scripts/lint.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: rust-quality-reports
+            when: always

@@ -1,0 +1,23 @@
+[package]
+name = "dirty"
+version = "0.1.0"
+edition = "2021"
+# Older than the LazyLock src/lib.rs uses, which Rust 1.80 stabilized.
+rust-version = "1.70"
+description = "A crate in which every rust-quality-orb check finds something."
+license = "MIT"
+publish = false
+
+[dependencies]
+# Never used: unused_deps finds it.
+unused-helper = { path = "unused-helper" }
+
+[features]
+default = []
+fast = []
+# extra uses what fast provides without enabling it, so it doesn't build on
+# its own: features finds it.
+extra = []
+
+[workspace]
+members = ["unused-helper"]

@@ -1,0 +1,15 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "A crate every rust-quality-orb check passes."
+license = "MIT"
+publish = false
+
+[dependencies]
+helper = { path = "../helper" }
+
+[features]
+default = []
+loud = []

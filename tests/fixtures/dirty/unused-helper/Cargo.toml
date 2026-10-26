@@ -1,0 +1,10 @@
+[package]
+name = "unused-helper"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "A dependency dirty never uses."
+license = "MIT"
+publish = false
+
+[dependencies]

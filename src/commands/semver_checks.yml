@@ -1,0 +1,126 @@
+description: >
+  Checks each library package's public API against a baseline for changes that
+  semver says need a new major (or minor) version, with cargo-semver-checks:
+  by default the newest release on crates.io, or a git revision, a version or
+  a directory. Needs cargo-semver-checks (install with tools:
+  cargo-semver-checks), whose release must read the job's toolchain's rustdoc
+  JSON. A breaking change the version number doesn't allow is a finding;
+  cargo-semver-checks failing fails the step whatever report_only says.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: >
+      Directory to run in: the root of the Cargo workspace or package, or any
+      directory in it.
+  packages:
+    type: string
+    default: ""
+    description: >
+      Workspace members to check, by package name, separated by commas or
+      spaces. Empty (the default) means every member. Environment variables
+      are expanded.
+  baseline_rev:
+    type: string
+    default: ""
+    description: >
+      A git revision of this repository to compare with (--baseline-rev), such
+      as origin/main or a release tag. Environment variables are expanded.
+  baseline_version:
+    type: string
+    default: ""
+    description: >
+      A version from the registry to compare with (--baseline-version).
+      Environment variables are expanded.
+  baseline_root:
+    type: string
+    default: ""
+    description: >
+      A directory holding the baseline's source to compare with
+      (--baseline-root). Environment variables are expanded.
+  release_type:
+    type: string
+    default: ""
+    description: >
+      The release to check for, major, minor or patch (--release-type),
+      instead of the one the version bump implies. Environment variables are
+      expanded.
+  extra_args:
+    type: string
+    default: ""
+    description: >
+      More cargo semver-checks check-release arguments, split like shell
+      words. Nothing in them is expanded or run; environment variables are
+      expanded before splitting. Options the parameters set (the baselines,
+      --release-type, --manifest-path), --color and --quiet are refused.
+  output_dir:
+    type: string
+    default: /tmp/rust-quality-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  report_name:
+    type: string
+    default: semver-checks
+    description: >
+      The reports' file name, without extension: <report_name>.json (the
+      failed lints) and <report_name>.log (cargo-semver-checks' output),
+      <report_name>.run-record.json and junit/<report_name>.xml. Give each run
+      of this command in a job its own.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Also write JUnit XML, one failing test case per failed lint, and show it
+      in CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which Cargo.toml and Cargo.lock, with which toolchain and settings, and
+      what it found.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report findings without failing the step, to adopt the check gradually.
+      cargo-semver-checks failing still fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: >
+      Store output_dir as job artifacts under rust-quality-reports/, including
+      when the step fails.
+steps:
+  - run:
+      name: cargo semver-checks
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_BASELINE_REV: << parameters.baseline_rev >>
+        PARAM_BASELINE_ROOT: << parameters.baseline_root >>
+        PARAM_BASELINE_VERSION: << parameters.baseline_version >>
+        PARAM_EXTRA_ARGS: << parameters.extra_args >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_PACKAGES: << parameters.packages >>
+        PARAM_RELEASE_TYPE: << parameters.release_type >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        SCRIPT_RUST_QUALITY_LIB: << include(scripts/lib/rust_quality.sh) >>
+      command: << include(scripts/semver_checks.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: rust-quality-reports
+            when: always
