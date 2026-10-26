@@ -330,7 +330,7 @@ Builds the documentation (`cargo doc --no-deps`) and reports every lint rustdoc 
 
 ### `rust-quality/test`
 
-Runs the tests with cargo-nextest, then the doctests, which nextest doesn't run, with `cargo test --doc`. Failing tests and code that doesn't build fail the step; a run in which no test ran does too, unless `no_tests` says otherwise. nextest's JUnit report is turned on with a tool config file, which the repository's `.config/nextest.toml` still overrides. Needs cargo-nextest.
+Runs the tests with cargo-nextest, then the doctests, which nextest doesn't run, with `cargo test --doc`. Failing tests and code that doesn't build fail the step; a run in which no test ran does too, unless `no_tests` says otherwise. nextest's JUnit report is turned on with a tool config file; when the repository's `.config/nextest.toml` names another path for the profile, the step reads the report from there. Needs cargo-nextest.
 
 | Parameter | Default | Description |
 | --- | --- | --- |
@@ -346,7 +346,7 @@ Runs the tests with cargo-nextest, then the doctests, which nextest doesn't run,
 
 ### `rust-quality/coverage`
 
-Measures line coverage with cargo-llvm-cov: the tests run once on an instrumented build, with `cargo test` or cargo-nextest, then each report is written from that run. Coverage below `coverage_min` is a finding; tests that fail, or don't build, leave no coverage to measure and fail the step whatever `report_only` says, and so does measuring no lines at all. `--release`, `--profile`, `--target` and `--doctests` in `extra_args` go to the report too. Needs cargo-llvm-cov and the `llvm-tools` component.
+Measures line coverage with cargo-llvm-cov: the tests run once on an instrumented build, with `cargo test` or cargo-nextest, then each report is written from that run. Coverage below `coverage_min` is a finding; tests that fail, or don't build, leave no coverage to measure and fail the step whatever `report_only` says, and so does measuring no lines at all. The reports measure the packages the run tested, and `--release`, `--target`, `--doctests` and the build profile (`--profile`, or `--cargo-profile` with `nextest`) in `extra_args` go to them too. Needs cargo-llvm-cov and the `llvm-tools` component.
 
 | Parameter | Default | Description |
 | --- | --- | --- |

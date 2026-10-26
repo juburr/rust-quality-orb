@@ -74,25 +74,45 @@ if [[ "${LOCKED}" == true ]]; then
     RQ_ARGS+=(--locked)
 fi
 RQ_ARGS+=(${RQ_EXTRA_ARGS[@]+"${RQ_EXTRA_ARGS[@]}"})
-REPORT_ARGS=(llvm-cov report)
+# report measures the packages the run selected: without --workspace or -p,
+# it would measure only the package in working_dir.
+REPORT_ARGS=(llvm-cov report "${RQ_PACKAGE_ARGS[@]}")
 if [[ -n "${IGNORE}" ]]; then
     REPORT_ARGS+=(--ignore-filename-regex "${IGNORE}")
 fi
 # report must find the objects the run built, so it gets the options in
-# extra_args that decide where they are and which run it reads.
-take_value=false
+# extra_args that decide where they are: --release, --target, --doctests and
+# the build profile, which is --profile for cargo test and --cargo-profile
+# with nextest (whose --profile is nextest's own), and --profile for report.
+take_value=""
 for word in ${RQ_EXTRA_ARGS[@]+"${RQ_EXTRA_ARGS[@]}"}; do
-    if [[ "${take_value}" == true ]]; then
-        REPORT_ARGS+=("${word}")
-        take_value=false
-    elif [[ "${word}" == --release || "${word}" == -r || "${word}" == --doctests ]]; then
-        REPORT_ARGS+=("${word}")
-    elif [[ "${word}" == --profile || "${word}" == --target ]]; then
-        REPORT_ARGS+=("${word}")
-        take_value=true
-    elif [[ "${word}" == --profile=* || "${word}" == --target=* ]]; then
-        REPORT_ARGS+=("${word}")
+    if [[ -n "${take_value}" ]]; then
+        if [[ "${take_value}" == keep ]]; then
+            REPORT_ARGS+=("${word}")
+        fi
+        take_value=""
+        continue
     fi
+    case "${word}" in
+        --release | -r | --doctests) REPORT_ARGS+=("${word}") ;;
+        --target) REPORT_ARGS+=("${word}"); take_value=keep ;;
+        --target=*) REPORT_ARGS+=("${word}") ;;
+        --profile)
+            if [[ "${USE_NEXTEST}" == true ]]; then
+                take_value=skip
+            else
+                REPORT_ARGS+=("${word}")
+                take_value=keep
+            fi
+            ;;
+        --profile=*)
+            if [[ "${USE_NEXTEST}" != true ]]; then
+                REPORT_ARGS+=("${word}")
+            fi
+            ;;
+        --cargo-profile) REPORT_ARGS+=(--profile); take_value=keep ;;
+        --cargo-profile=*) REPORT_ARGS+=("--profile=${word#--cargo-profile=}") ;;
+    esac
 done
 # shellcheck disable=SC2034 # read by rq_run_record
 RQ_INPUTS=()

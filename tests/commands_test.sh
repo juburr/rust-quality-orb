@@ -147,8 +147,9 @@ EOF
 # cargo-nextest: STUB_NEXTEST is pass, fail (one test fails, exit 100),
 # flaky (one passes on a retry), flakyfail (the same, failing the run, as
 # flaky-result = "fail" does: exit 100), build (exit 101), none (no tests,
-# exit 4), or mismatch (exit 100 with every test passing in the JUnit
-# report). It
+# exit 4), mismatch (exit 100 with every test passing in the JUnit
+# report), or nojunit (exit 0, writing no report). STUB_JUNIT_PATH stands
+# for a repository config that names the report's path itself. It
 # writes the JUnit report where the tool config file the script passes asks.
 {
     echo '#!/usr/bin/env bash'
@@ -164,7 +165,7 @@ for arg in "$@"; do
     esac
     prev=${arg}
 done
-path=$(sed -n 's/^path = "\(.*\)"$/\1/p' "${config}")
+path=${STUB_JUNIT_PATH:-$(sed -n 's/^path = "\(.*\)"$/\1/p' "${config}")}
 target=$("${REAL_CARGO}" metadata --format-version 1 --no-deps | jq -r .target_directory)
 junit="${target}/nextest/${profile}/${path}"
 mkdir -p "${junit%/*}"
@@ -172,6 +173,7 @@ mode=${STUB_NEXTEST:-pass}
 case "${mode}" in
     build) echo "error[E0308]: mismatched types"; echo "error: could not compile \`app\` (test \"greeting\")"; exit 101 ;;
     none) echo "error: no tests to run"; exit 4 ;;
+    nojunit) echo "     Summary [   0.010s] 3 tests run"; exit 0 ;;
 esac
 {
     echo '<?xml version="1.0" encoding="UTF-8"?>'
@@ -692,6 +694,11 @@ run test clean STUB_NEXTEST=none
 check "fails when no test runs and no_tests is fail" said "no test ran, and no_tests is fail"
 run test clean STUB_NEXTEST=mismatch STUB_DOCTEST=pass
 check "fails when nextest's exit code and JUnit disagree" said "names none"
+run test clean STUB_NEXTEST=fail STUB_DOCTEST=pass STUB_JUNIT_PATH=reports/junit.xml
+check "reads the report where the repository's config put it" said "nextest wrote its JUnit report where the repository's config says"
+check "naming the failing test from it" said "app::doubling doubles_wrongly"
+run test clean STUB_NEXTEST=nojunit STUB_DOCTEST=pass
+check "fails when nextest wrote no report it can read" said "ERROR: The tests could not run: cargo-nextest wrote no JUnit report"
 run test clean STUB_DOCTEST=pass doctests=false
 check "skips the doctests when doctests is false" call_count cargo-doc 0
 run test clean STUB_DOCTEST=pass partition=true CIRCLE_NODE_TOTAL=3 CIRCLE_NODE_INDEX=1
@@ -734,6 +741,14 @@ check "fails when it measured no lines, even with report_only" said "ERROR: carg
 run coverage clean "extra_args=--release --target x86_64-unknown-linux-gnu --no-cfg-coverage"
 check "gives report the options that say where the run's objects are" called_with cargo-llvm-cov llvm-cov report --json --release --target x86_64-unknown-linux-gnu
 check "but not the others" not_called_with cargo-llvm-cov report --no-cfg-coverage
+check "and the packages the run selected" called_with cargo-llvm-cov llvm-cov report --json --workspace
+run coverage clean packages=helper
+check "-p each, when packages names them" called_with cargo-llvm-cov llvm-cov report --json -p helper
+run coverage clean nextest=true "extra_args=--profile ci --cargo-profile=release"
+check "with nextest, the build profile is --cargo-profile's" called_with cargo-llvm-cov llvm-cov report --json --profile=release
+check "not nextest's own --profile" not_called_with cargo-llvm-cov report ci
+run coverage clean "extra_args=--profile release"
+check "and without, --profile's" called_with cargo-llvm-cov llvm-cov report --json --profile release
 run coverage clean STUB_COV=fail report_only=true
 check "fails when the tests fail, even with report_only" said "ERROR: the tests failed or did not build"
 run coverage clean STUB_COV=nollvm

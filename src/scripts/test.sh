@@ -107,10 +107,22 @@ fi
 
 echo "Running the tests of ${RQ_PACKAGES[*]:-the workspace} with ${RQ_TOOL_VERSION:-cargo-nextest}..."
 RC=0
+: > "${RQ_WORK}/started"
 CARGO=${RQ_CARGO} CARGO_TERM_COLOR=never "${NEXTEST}" "${RQ_ARGS[@]}" --tool-config-file "rust-quality-orb:${RQ_WORK}/nextest.toml" \
     > "${RQ_BASE}.log" 2>&1 || RC=$?
 RQ_REPORTS=("${RQ_BASE}.log")
 cat "${RQ_BASE}.log"
+# The repository's .config/nextest.toml outranks the tool config file, so a
+# JUnit path it sets for this profile is where nextest wrote: the one report
+# in the target directory that the run wrote.
+if [[ ! -f "${NEXTEST_JUNIT}" ]]; then
+    mapfile -t WRITTEN < <(find "${RQ_TARGET_DIR}" -type f -name '*.xml' -newer "${RQ_WORK}/started" \
+        -exec grep -l '<testsuites' {} + 2> /dev/null || true)
+    if [[ "${#WRITTEN[@]}" -eq 1 ]]; then
+        NEXTEST_JUNIT=${WRITTEN[0]}
+        echo "nextest wrote its JUnit report where the repository's config says: ${NEXTEST_JUNIT}."
+    fi
+fi
 
 # The tests, from nextest's JUnit: one line per test, with its status
 # (passed, failed or flaky), class name and name.
@@ -141,7 +153,12 @@ FAILED=$(jq '[.[] | select(.status == "failed")] | length' <<< "${TESTS_JSON}")
 
 ERROR=""
 case "${RC}" in
-    0 | 100) ;;
+    0 | 100)
+        # nextest writes the report at the end of every run it finishes.
+        if [[ ! -f "${NEXTEST_JUNIT}" ]]; then
+            ERROR="cargo-nextest wrote no JUnit report the step could find (not ${NEXTEST_JUNIT}, nor one other new report in ${RQ_TARGET_DIR}), so its results can't be read"
+        fi
+        ;;
     4) ERROR="no test ran, and no_tests is fail" ;;
     101) ERROR="the tests did not build" ;;
     *) ERROR="cargo-nextest failed (exit code ${RC})" ;;
