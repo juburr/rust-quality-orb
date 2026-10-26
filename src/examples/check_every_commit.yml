@@ -1,0 +1,30 @@
+description: >
+  Hold every commit to a standard: formatting, clippy, documentation and the
+  tests, on the Rust the image provides. The cargo tools come checksum-verified
+  from this orb's install, which puts them ahead of any copy in ~/.cargo/bin.
+  Each check writes JSON and JUnit, shows its findings in the Tests tab, and
+  fails the job on them; set report_only on a check to adopt it gradually.
+
+usage:
+  version: 2.1
+  orbs:
+    rust-quality: juburr/rust-quality-orb@0.1.0
+  jobs:
+    quality:
+      docker:
+        - image: cimg/rust:1.99.1
+      steps:
+        - checkout
+        - rust-quality/install:
+            tools: cargo-nextest
+        - rust-quality/fmt
+        - rust-quality/lint:
+            all_features: true
+            locked: true
+        - rust-quality/docs
+        - rust-quality/test:
+            locked: true
+  workflows:
+    quality:
+      jobs:
+        - quality

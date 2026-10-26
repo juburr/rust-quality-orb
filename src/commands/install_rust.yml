@@ -1,0 +1,120 @@
+description: >
+  Installs one Rust release, pinned, without rustup: rustc, cargo, the
+  standard library, and the components named in components, for Linux on
+  amd64 or arm64, picked from the machine's CPU architecture. The release's
+  channel manifest, which the Rust project signs and which lists the SHA-256
+  of every component, is verified against this orb's SHA-512 checksum table,
+  and every component against the manifest. Its bin directory goes first on
+  the PATH, ahead of rustup's proxies on images that have them, and a
+  rust-toolchain.toml has no effect on it. Use install_rustup instead to
+  follow rust-toolchain.toml, or for nightly toolchains.
+parameters:
+  caching:
+    type: boolean
+    default: true
+    description: >
+      Cache the verified manifest and component archives between jobs (about
+      130 MB with clippy and rustfmt), keyed by version, components, targets,
+      CPU architecture and home directory. Only archives of a verified
+      manifest are cached, and each is verified again before it is used.
+  components:
+    type: string
+    default: "clippy,rustfmt"
+    description: >
+      Components to install besides rustc, cargo and the standard library,
+      separated by commas or spaces: any of clippy (the lint command),
+      rustfmt (fmt), llvm-tools (coverage) and rust-src. Environment
+      variables are expanded.
+  download_base_url:
+    type: string
+    default: ""
+    description: >
+      Base URL of an internal mirror of https://static.rust-lang.org, such as
+      an Artifactory or Nexus remote repository, to download the manifest and
+      the components from. It replaces https://static.rust-lang.org in every
+      download URL, so the mirror must serve the same paths. It must be an
+      https:// URL, without credentials (user:password@) or a query or
+      fragment, which would show in the log. What is downloaded is still
+      verified. Environment variables are expanded.
+  install_path:
+    type: string
+    default: ""
+    description: >
+      Absolute path of the directory to install Rust into: the toolchain's
+      root, whose bin directory is added to the PATH of later steps when it
+      isn't already on it. It must be missing, hold no files, or be a Rust
+      installation this command installed before, which it replaces, and be
+      writable without root. Environment variables are expanded. Defaults to
+      $HOME/.rust-quality-orb/rust.
+  targets:
+    type: string
+    default: ""
+    description: >
+      Targets to install the standard library for besides the machine's own
+      (x86_64-unknown-linux-gnu or aarch64-unknown-linux-gnu), separated by
+      commas or spaces, such as x86_64-unknown-linux-musl or
+      wasm32-unknown-unknown, for the features command's targets. Environment
+      variables are expanded.
+  verify_checksums:
+    type: enum
+    enum: ["false", "known_versions", "strict"]
+    default: strict
+    description: >
+      SHA-512 verification of the release's manifest against this orb's
+      checksum table. "strict" (default) fails before downloading anything
+      when the version has no checksum in the table. "known_versions"
+      verifies listed versions and installs unlisted versions from an
+      unverified manifest, with a warning. "false" skips verification and is
+      not recommended. Components are always checked against the manifest.
+  version:
+    type: string
+    default: "1.99.1"
+    description: >
+      Version of Rust to install, such as 1.99.1: a stable release from
+      1.56.0 on. A leading "v" is ignored, and environment variables are
+      expanded.
+steps:
+  - when:
+      condition: << parameters.caching >>
+      steps:
+        # The key is computed from a file that names the CPU (uname -m, as
+        # {{ arch }} also encodes the CPU model and would split the cache by
+        # host), HOME (a cache is restored to the absolute path it was saved
+        # from), and the version with environment variables expanded, and
+        # from one that names the components and targets.
+        - run:
+            name: Prepare Rust cache key
+            environment:
+              ORB_CACHE_KEY_FILE: /tmp/rust-quality-orb-rust-cache-key
+              PARAM_VERSION: << parameters.version >>
+            command: << include(scripts/cache_key.sh) >>
+        - run:
+            name: Prepare Rust components cache key
+            environment:
+              ORB_CACHE_KEY_FILE: /tmp/rust-quality-orb-rust-components-cache-key
+              PARAM_COMPONENTS: << parameters.components >>
+              PARAM_TARGETS: << parameters.targets >>
+            command: << include(scripts/rust_cache_key.sh) >>
+        # A saved cache can't be replaced. Bump v1 when an existing checksum
+        # table entry changes, so caches saved for the old bytes stop being
+        # restored.
+        - restore_cache:
+            key: rust-quality-orb-rust-v1-<< parameters.version >>-{{ checksum "/tmp/rust-quality-orb-rust-cache-key" }}-{{ checksum "/tmp/rust-quality-orb-rust-components-cache-key" }}
+  - run:
+      name: Install Rust << parameters.version >>
+      environment:
+        PARAM_CACHING: << parameters.caching >>
+        PARAM_COMPONENTS: << parameters.components >>
+        PARAM_DOWNLOAD_BASE_URL: << parameters.download_base_url >>
+        PARAM_INSTALL_PATH: << parameters.install_path >>
+        PARAM_TARGETS: << parameters.targets >>
+        PARAM_VERIFY_CHECKSUMS: << parameters.verify_checksums >>
+        PARAM_VERSION: << parameters.version >>
+      command: << include(install/rust/install.sh) >>
+  - when:
+      condition: << parameters.caching >>
+      steps:
+        - save_cache:
+            key: rust-quality-orb-rust-v1-<< parameters.version >>-{{ checksum "/tmp/rust-quality-orb-rust-cache-key" }}-{{ checksum "/tmp/rust-quality-orb-rust-components-cache-key" }}
+            paths:
+              - ~/.cache/rust-quality-orb-rust

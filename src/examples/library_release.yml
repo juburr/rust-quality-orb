@@ -1,0 +1,28 @@
+description: >
+  Check a library before it is released: that its public API keeps semver
+  against the newest release on crates.io (or a git revision, with
+  baseline_rev), that it builds on the rust-version Cargo.toml declares, with
+  every feature on its own, and that it declares no dependency it doesn't use.
+
+usage:
+  version: 2.1
+  orbs:
+    rust-quality: juburr/rust-quality-orb@0.1.0
+  jobs:
+    release-checks:
+      docker:
+        - image: cimg/rust:1.99.1
+      steps:
+        - checkout
+        - rust-quality/install:
+            tools: cargo-semver-checks cargo-hack cargo-shear
+        - rust-quality/semver_checks
+        - rust-quality/msrv
+        - rust-quality/features:
+            mode: feature_powerset
+            depth: "2"
+        - rust-quality/unused_deps
+  workflows:
+    release-checks:
+      jobs:
+        - release-checks

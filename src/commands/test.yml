@@ -1,0 +1,163 @@
+description: >
+  Runs the tests with cargo-nextest, which runs each test in its own process,
+  writes JUnit, retries flaky tests and splits a run across CircleCI's
+  parallel nodes, and then the doctests, which nextest doesn't run, with cargo
+  test --doc. Needs cargo-nextest (install with tools: cargo-nextest). Tests
+  that fail, and code that doesn't build, fail the step.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: >
+      Directory to run in: the root of the Cargo workspace or package, or any
+      directory in it.
+  packages:
+    type: string
+    default: ""
+    description: >
+      Workspace members to test, by package name, separated by commas or
+      spaces. Empty (the default) means every member. Environment variables
+      are expanded.
+  features:
+    type: string
+    default: ""
+    description: >
+      Features to enable, separated by commas or spaces, as cargo's --features
+      takes them (package/feature for a dependency's). Environment variables
+      are expanded.
+  all_features:
+    type: boolean
+    default: false
+    description: >
+      Enable every feature (--all-features).
+  no_default_features:
+    type: boolean
+    default: false
+    description: >
+      Leave the default features off (--no-default-features).
+  profile:
+    type: string
+    default: default
+    description: >
+      The nextest profile to run with (--profile), from .config/nextest.toml,
+      such as ci. Environment variables are expanded.
+  filter:
+    type: string
+    default: ""
+    description: >
+      A nextest filterset choosing the tests to run (-E), such as 'not
+      test(slow)'. Empty runs every test. Environment variables are expanded.
+  retries:
+    type: string
+    default: ""
+    description: >
+      How many times to retry a failing test (--retries), counting a test that
+      passes on a retry as flaky. Empty keeps the profile's setting.
+      Environment variables are expanded.
+  no_tests:
+    type: enum
+    enum: ["fail", "warn", "pass"]
+    default: fail
+    description: >
+      What to do when no test runs (--no-tests): fail, warn or pass. When
+      partition splits the run, fail becomes warn, since a node's share can be
+      empty.
+  doctests:
+    type: boolean
+    default: true
+    description: >
+      Run the doctests too, with cargo test --doc, on the first node only when
+      partition splits the run.
+  partition:
+    type: boolean
+    default: false
+    description: >
+      Split the tests across the job's parallel nodes (CircleCI's parallelism,
+      from CIRCLE_NODE_TOTAL and CIRCLE_NODE_INDEX), each running a share
+      (--partition hash:<node>/<total>).
+  locked:
+    type: boolean
+    default: false
+    description: >
+      Pass --locked, so cargo fails instead of changing a Cargo.lock that
+      doesn't match Cargo.toml. Needs a committed Cargo.lock.
+  extra_args:
+    type: string
+    default: ""
+    description: >
+      More cargo nextest run arguments, split like shell words. Nothing in
+      them is expanded or run; environment variables are expanded before
+      splitting. Options the parameters set (--profile, --partition,
+      --no-tests, --retries, -E, --no-fail-fast) and those that change the
+      reports (--message-format, --tool-config-file, --color) are refused.
+  output_dir:
+    type: string
+    default: /tmp/rust-quality-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  report_name:
+    type: string
+    default: nextest
+    description: >
+      The reports' file name, without extension: <report_name>.json (the
+      counts and failing tests), <report_name>.log (nextest's output),
+      <report_name>.doctests.log, <report_name>.run-record.json, and
+      junit/<report_name>/, which holds nextest.xml and doctests.xml. Give
+      each run of this command in a job its own.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Also write JUnit XML, nextest's own (junit/<report_name>/nextest.xml)
+      and the doctests' (doctests.xml), and show it in CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which Cargo.toml and Cargo.lock, with which toolchain and settings, and
+      how many tests passed, failed, were flaky or skipped.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: >
+      Store output_dir as job artifacts under rust-quality-reports/, including
+      when the step fails.
+steps:
+  - run:
+      name: cargo nextest
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_ALL_FEATURES: << parameters.all_features >>
+        PARAM_DOCTESTS: << parameters.doctests >>
+        PARAM_EXTRA_ARGS: << parameters.extra_args >>
+        PARAM_FEATURES: << parameters.features >>
+        PARAM_FILTER: << parameters.filter >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_LOCKED: << parameters.locked >>
+        PARAM_NO_DEFAULT_FEATURES: << parameters.no_default_features >>
+        PARAM_NO_TESTS: << parameters.no_tests >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_PACKAGES: << parameters.packages >>
+        PARAM_PARTITION: << parameters.partition >>
+        PARAM_PROFILE: << parameters.profile >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_RETRIES: << parameters.retries >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        SCRIPT_RUST_QUALITY_LIB: << include(scripts/lib/rust_quality.sh) >>
+      command: << include(scripts/test.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: rust-quality-reports
+            when: always

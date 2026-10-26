@@ -1,0 +1,427 @@
+name: Install rust-quality-orb tools
+description: >
+  Installs the tools named in tools, each verified against this orb's checksum
+  table, through the install command for that tool (install_rust,
+  install_rustup, install_cargo_nextest, ...), which can also be used on its
+  own. The five cargo tools are their static release binaries, for amd64 or
+  arm64, picked from the machine's CPU architecture. A toolchain comes from
+  rust (one pinned Rust release, without rustup) or rustup (rustup and a
+  toolchain it installs), or from the image, such as cimg/rust. Run this
+  before the orb's other commands. The GitHub Actions twin of the orb's
+  install command.
+author: juburr
+
+inputs:
+  caching:
+    description: >
+      Cache each tool's verified download between jobs. Only verified files
+      are cached, and a cached file is verified again before it is used.
+    default: "true"
+  cargo_hack_version:
+    description: >
+      The cargo-hack version, when tools names it.
+    default: "0.6.45"
+  cargo_llvm_cov_version:
+    description: >
+      The cargo-llvm-cov version, when tools names it.
+    default: "0.9.1"
+  cargo_nextest_version:
+    description: >
+      The cargo-nextest version, when tools names it.
+    default: "0.9.149"
+  cargo_semver_checks_version:
+    description: >
+      The cargo-semver-checks version, when tools names it.
+    default: "0.51.0"
+  cargo_shear_version:
+    description: >
+      The cargo-shear version, when tools names it.
+    default: "1.14.0"
+  components:
+    description: >
+      With rust or rustup, the toolchain components to install besides rustc,
+      cargo and the standard library, separated by commas or spaces: clippy
+      (the lint command), rustfmt (fmt), llvm-tools (coverage), rust-src.
+    default: clippy,rustfmt
+  download_base_url:
+    description: >
+      Base URL of an internal mirror of GitHub releases, such as an
+      Artifactory or Nexus remote repository, to download the cargo tools from
+      instead of https://github.com. It replaces https://github.com in the
+      release URL, so the mirror must serve the same paths. It must be an
+      https:// URL, without credentials (user:password@) or a query or
+      fragment, which would show in the log. What is downloaded is still
+      verified against this orb's checksum table.
+    default: ""
+  install_path:
+    description: >
+      Absolute path of the directory to install the cargo tools into. It is
+      created if needed and added to the PATH of later steps when it isn't
+      already on it, and must be writable without root. Defaults to
+      $HOME/.rust-quality-orb/bin, which goes first on the PATH, ahead of
+      copies in ~/.cargo/bin.
+    default: ""
+  rust_download_base_url:
+    description: >
+      Base URL of an internal mirror of https://static.rust-lang.org, to
+      download Rust or rustup, and rustup's toolchains, from. The same rules
+      as download_base_url apply.
+    default: ""
+  rust_install_path:
+    description: >
+      With rust, the directory to install Rust into (the toolchain's root),
+      defaulting to $HOME/.rust-quality-orb/rust; with rustup, rustup's
+      CARGO_HOME, defaulting to CARGO_HOME or $HOME/.cargo.
+    default: ""
+  rust_version:
+    description: >
+      The Rust release, when tools names rust.
+    default: "1.99.1"
+  rustup_version:
+    description: >
+      The rustup version, when tools names rustup.
+    default: "1.29.2"
+  targets:
+    description: >
+      With rust or rustup, the targets to install the standard library for
+      besides the machine's own, separated by commas or spaces.
+    default: ""
+  toolchain:
+    description: >
+      With rustup, the toolchain to install, such as stable or
+      nightly-2026-10-01. Empty (the default) installs the one
+      rust-toolchain.toml names, or else stable.
+    default: ""
+  tools:
+    description: >
+      The tools to install, separated by commas or spaces: any of rust or
+      rustup (not both), cargo-nextest, cargo-llvm-cov, cargo-hack,
+      cargo-semver-checks and cargo-shear. An unknown name fails the step. The
+      toolchain installs first.
+    default: cargo-nextest,cargo-llvm-cov,cargo-hack,cargo-semver-checks,cargo-shear
+  verify_checksums:
+    description: >
+      SHA-512 verification against this orb's checksum table, for every tool.
+      "strict" (default) fails before downloading anything when a version has
+      no checksum in the table. "known_versions" verifies listed versions and
+      installs unlisted versions unverified, with a warning. "false" skips
+      verification and is not recommended.
+    default: strict
+
+runs:
+  using: composite
+  steps:
+    - name: Check the tools to install
+      id: tools
+      shell: bash
+      env:
+        PARAM_TOOLS: ${{ inputs.tools }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/install_tools.sh"
+        # The names, space-separated with a space on either side, for the
+        # if: conditions below.
+        read -r -a tools <<< "${PARAM_TOOLS//,/ }"
+        printf 'list= %s \n' "${tools[*]}" >> "${GITHUB_OUTPUT}"
+    # The key is computed from files that name the CPU (uname -m), HOME (a
+    # cache is restored to the absolute path it was saved from) and what
+    # is installed, as the orb's command computes it.
+    - name: Prepare Rust cache key
+      if: contains(steps.tools.outputs.list, ' rust ') && (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/rust-quality-orb-rust-cache-key
+        PARAM_VERSION: ${{ inputs.rust_version }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/cache_key.sh"
+    - name: Prepare Rust components cache key
+      id: rust-cache-key
+      if: contains(steps.tools.outputs.list, ' rust ') && (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/rust-quality-orb-rust-components-cache-key
+        PARAM_COMPONENTS: ${{ inputs.components }}
+        PARAM_TARGETS: ${{ inputs.targets }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/rust_cache_key.sh"
+        # Bump the version in the key when an existing checksum table entry
+        # changes, so caches saved for the old bytes stop being restored.
+        key0=$(sha256sum < "${RUNNER_TEMP}/rust-quality-orb-rust-cache-key" | cut -c1-64)
+        key1=$(sha256sum < "${RUNNER_TEMP}/rust-quality-orb-rust-components-cache-key" | cut -c1-64)
+        printf 'key=rust-quality-orb-rust-v1-%s-%s\n' "${key0}" "${key1}" >> "${GITHUB_OUTPUT}"
+    - name: Restore Rust cache
+      id: rust-restore
+      if: contains(steps.tools.outputs.list, ' rust ') && (inputs.caching == 'true' || inputs.caching == '1')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-rust
+        key: ${{ steps.rust-cache-key.outputs.key }}
+    - name: Install Rust
+      if: contains(steps.tools.outputs.list, ' rust ')
+      shell: bash
+      env:
+        PARAM_CACHING: ${{ inputs.caching }}
+        PARAM_COMPONENTS: ${{ inputs.components }}
+        PARAM_DOWNLOAD_BASE_URL: ${{ inputs.rust_download_base_url }}
+        PARAM_INSTALL_PATH: ${{ inputs.rust_install_path }}
+        PARAM_TARGETS: ${{ inputs.targets }}
+        PARAM_VERIFY_CHECKSUMS: ${{ inputs.verify_checksums }}
+        PARAM_VERSION: ${{ inputs.rust_version }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/install/rust/install.sh"
+    # A saved cache can't be replaced, so it is only saved when none was
+    # restored. Like the orb's save_cache, it is saved right after the
+    # step, not at the end of the job.
+    - name: Save Rust cache
+      if: contains(steps.tools.outputs.list, ' rust ') && (inputs.caching == 'true' || inputs.caching == '1') && steps.rust-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-rust
+        key: ${{ steps.rust-cache-key.outputs.key }}
+    # The key is computed from files that name the CPU (uname -m), HOME (a
+    # cache is restored to the absolute path it was saved from) and what
+    # is installed, as the orb's command computes it.
+    - name: Prepare rustup cache key
+      id: rustup-cache-key
+      if: contains(steps.tools.outputs.list, ' rustup ') && (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/rust-quality-orb-rustup-cache-key
+        PARAM_VERSION: ${{ inputs.rustup_version }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/cache_key.sh"
+        # Bump the version in the key when an existing checksum table entry
+        # changes, so caches saved for the old bytes stop being restored.
+        printf 'key=rust-quality-orb-rustup-v1-%s\n' "$(sha256sum < "${RUNNER_TEMP}/rust-quality-orb-rustup-cache-key" | cut -c1-64)" >> "${GITHUB_OUTPUT}"
+    - name: Restore rustup cache
+      id: rustup-restore
+      if: contains(steps.tools.outputs.list, ' rustup ') && (inputs.caching == 'true' || inputs.caching == '1')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-rustup
+        key: ${{ steps.rustup-cache-key.outputs.key }}
+    - name: Install rustup
+      if: contains(steps.tools.outputs.list, ' rustup ')
+      shell: bash
+      env:
+        PARAM_CACHING: ${{ inputs.caching }}
+        PARAM_COMPONENTS: ${{ inputs.components }}
+        PARAM_DOWNLOAD_BASE_URL: ${{ inputs.rust_download_base_url }}
+        PARAM_INSTALL_PATH: ${{ inputs.rust_install_path }}
+        PARAM_TARGETS: ${{ inputs.targets }}
+        PARAM_TOOLCHAIN: ${{ inputs.toolchain }}
+        PARAM_VERIFY_CHECKSUMS: ${{ inputs.verify_checksums }}
+        PARAM_VERSION: ${{ inputs.rustup_version }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/install/rustup/install.sh"
+    # A saved cache can't be replaced, so it is only saved when none was
+    # restored. Like the orb's save_cache, it is saved right after the
+    # step, not at the end of the job.
+    - name: Save rustup cache
+      if: contains(steps.tools.outputs.list, ' rustup ') && (inputs.caching == 'true' || inputs.caching == '1') && steps.rustup-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-rustup
+        key: ${{ steps.rustup-cache-key.outputs.key }}
+    # The key is computed from files that name the CPU (uname -m), HOME (a
+    # cache is restored to the absolute path it was saved from) and what
+    # is installed, as the orb's command computes it.
+    - name: Prepare cargo-nextest cache key
+      id: cargo-nextest-cache-key
+      if: contains(steps.tools.outputs.list, ' cargo-nextest ') && (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/rust-quality-orb-cargo-nextest-cache-key
+        PARAM_VERSION: ${{ inputs.cargo_nextest_version }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/cache_key.sh"
+        # Bump the version in the key when an existing checksum table entry
+        # changes, so caches saved for the old bytes stop being restored.
+        printf 'key=rust-quality-orb-cargo-nextest-v1-%s\n' "$(sha256sum < "${RUNNER_TEMP}/rust-quality-orb-cargo-nextest-cache-key" | cut -c1-64)" >> "${GITHUB_OUTPUT}"
+    - name: Restore cargo-nextest cache
+      id: cargo-nextest-restore
+      if: contains(steps.tools.outputs.list, ' cargo-nextest ') && (inputs.caching == 'true' || inputs.caching == '1')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-cargo-nextest
+        key: ${{ steps.cargo-nextest-cache-key.outputs.key }}
+    - name: Install cargo-nextest
+      if: contains(steps.tools.outputs.list, ' cargo-nextest ')
+      shell: bash
+      env:
+        PARAM_CACHING: ${{ inputs.caching }}
+        PARAM_DOWNLOAD_BASE_URL: ${{ inputs.download_base_url }}
+        PARAM_INSTALL_PATH: ${{ inputs.install_path }}
+        PARAM_VERIFY_CHECKSUMS: ${{ inputs.verify_checksums }}
+        PARAM_VERSION: ${{ inputs.cargo_nextest_version }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/install/cargo-nextest/install.sh"
+    # A saved cache can't be replaced, so it is only saved when none was
+    # restored. Like the orb's save_cache, it is saved right after the
+    # step, not at the end of the job.
+    - name: Save cargo-nextest cache
+      if: contains(steps.tools.outputs.list, ' cargo-nextest ') && (inputs.caching == 'true' || inputs.caching == '1') && steps.cargo-nextest-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-cargo-nextest
+        key: ${{ steps.cargo-nextest-cache-key.outputs.key }}
+    # The key is computed from files that name the CPU (uname -m), HOME (a
+    # cache is restored to the absolute path it was saved from) and what
+    # is installed, as the orb's command computes it.
+    - name: Prepare cargo-llvm-cov cache key
+      id: cargo-llvm-cov-cache-key
+      if: contains(steps.tools.outputs.list, ' cargo-llvm-cov ') && (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/rust-quality-orb-cargo-llvm-cov-cache-key
+        PARAM_VERSION: ${{ inputs.cargo_llvm_cov_version }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/cache_key.sh"
+        # Bump the version in the key when an existing checksum table entry
+        # changes, so caches saved for the old bytes stop being restored.
+        printf 'key=rust-quality-orb-cargo-llvm-cov-v1-%s\n' "$(sha256sum < "${RUNNER_TEMP}/rust-quality-orb-cargo-llvm-cov-cache-key" | cut -c1-64)" >> "${GITHUB_OUTPUT}"
+    - name: Restore cargo-llvm-cov cache
+      id: cargo-llvm-cov-restore
+      if: contains(steps.tools.outputs.list, ' cargo-llvm-cov ') && (inputs.caching == 'true' || inputs.caching == '1')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-cargo-llvm-cov
+        key: ${{ steps.cargo-llvm-cov-cache-key.outputs.key }}
+    - name: Install cargo-llvm-cov
+      if: contains(steps.tools.outputs.list, ' cargo-llvm-cov ')
+      shell: bash
+      env:
+        PARAM_CACHING: ${{ inputs.caching }}
+        PARAM_DOWNLOAD_BASE_URL: ${{ inputs.download_base_url }}
+        PARAM_INSTALL_PATH: ${{ inputs.install_path }}
+        PARAM_VERIFY_CHECKSUMS: ${{ inputs.verify_checksums }}
+        PARAM_VERSION: ${{ inputs.cargo_llvm_cov_version }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/install/cargo-llvm-cov/install.sh"
+    # A saved cache can't be replaced, so it is only saved when none was
+    # restored. Like the orb's save_cache, it is saved right after the
+    # step, not at the end of the job.
+    - name: Save cargo-llvm-cov cache
+      if: contains(steps.tools.outputs.list, ' cargo-llvm-cov ') && (inputs.caching == 'true' || inputs.caching == '1') && steps.cargo-llvm-cov-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-cargo-llvm-cov
+        key: ${{ steps.cargo-llvm-cov-cache-key.outputs.key }}
+    # The key is computed from files that name the CPU (uname -m), HOME (a
+    # cache is restored to the absolute path it was saved from) and what
+    # is installed, as the orb's command computes it.
+    - name: Prepare cargo-hack cache key
+      id: cargo-hack-cache-key
+      if: contains(steps.tools.outputs.list, ' cargo-hack ') && (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/rust-quality-orb-cargo-hack-cache-key
+        PARAM_VERSION: ${{ inputs.cargo_hack_version }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/cache_key.sh"
+        # Bump the version in the key when an existing checksum table entry
+        # changes, so caches saved for the old bytes stop being restored.
+        printf 'key=rust-quality-orb-cargo-hack-v1-%s\n' "$(sha256sum < "${RUNNER_TEMP}/rust-quality-orb-cargo-hack-cache-key" | cut -c1-64)" >> "${GITHUB_OUTPUT}"
+    - name: Restore cargo-hack cache
+      id: cargo-hack-restore
+      if: contains(steps.tools.outputs.list, ' cargo-hack ') && (inputs.caching == 'true' || inputs.caching == '1')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-cargo-hack
+        key: ${{ steps.cargo-hack-cache-key.outputs.key }}
+    - name: Install cargo-hack
+      if: contains(steps.tools.outputs.list, ' cargo-hack ')
+      shell: bash
+      env:
+        PARAM_CACHING: ${{ inputs.caching }}
+        PARAM_DOWNLOAD_BASE_URL: ${{ inputs.download_base_url }}
+        PARAM_INSTALL_PATH: ${{ inputs.install_path }}
+        PARAM_VERIFY_CHECKSUMS: ${{ inputs.verify_checksums }}
+        PARAM_VERSION: ${{ inputs.cargo_hack_version }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/install/cargo-hack/install.sh"
+    # A saved cache can't be replaced, so it is only saved when none was
+    # restored. Like the orb's save_cache, it is saved right after the
+    # step, not at the end of the job.
+    - name: Save cargo-hack cache
+      if: contains(steps.tools.outputs.list, ' cargo-hack ') && (inputs.caching == 'true' || inputs.caching == '1') && steps.cargo-hack-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-cargo-hack
+        key: ${{ steps.cargo-hack-cache-key.outputs.key }}
+    # The key is computed from files that name the CPU (uname -m), HOME (a
+    # cache is restored to the absolute path it was saved from) and what
+    # is installed, as the orb's command computes it.
+    - name: Prepare cargo-semver-checks cache key
+      id: cargo-semver-checks-cache-key
+      if: contains(steps.tools.outputs.list, ' cargo-semver-checks ') && (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/rust-quality-orb-cargo-semver-checks-cache-key
+        PARAM_VERSION: ${{ inputs.cargo_semver_checks_version }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/cache_key.sh"
+        # Bump the version in the key when an existing checksum table entry
+        # changes, so caches saved for the old bytes stop being restored.
+        printf 'key=rust-quality-orb-cargo-semver-checks-v1-%s\n' "$(sha256sum < "${RUNNER_TEMP}/rust-quality-orb-cargo-semver-checks-cache-key" | cut -c1-64)" >> "${GITHUB_OUTPUT}"
+    - name: Restore cargo-semver-checks cache
+      id: cargo-semver-checks-restore
+      if: contains(steps.tools.outputs.list, ' cargo-semver-checks ') && (inputs.caching == 'true' || inputs.caching == '1')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-cargo-semver-checks
+        key: ${{ steps.cargo-semver-checks-cache-key.outputs.key }}
+    - name: Install cargo-semver-checks
+      if: contains(steps.tools.outputs.list, ' cargo-semver-checks ')
+      shell: bash
+      env:
+        PARAM_CACHING: ${{ inputs.caching }}
+        PARAM_DOWNLOAD_BASE_URL: ${{ inputs.download_base_url }}
+        PARAM_INSTALL_PATH: ${{ inputs.install_path }}
+        PARAM_VERIFY_CHECKSUMS: ${{ inputs.verify_checksums }}
+        PARAM_VERSION: ${{ inputs.cargo_semver_checks_version }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/install/cargo-semver-checks/install.sh"
+    # A saved cache can't be replaced, so it is only saved when none was
+    # restored. Like the orb's save_cache, it is saved right after the
+    # step, not at the end of the job.
+    - name: Save cargo-semver-checks cache
+      if: contains(steps.tools.outputs.list, ' cargo-semver-checks ') && (inputs.caching == 'true' || inputs.caching == '1') && steps.cargo-semver-checks-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-cargo-semver-checks
+        key: ${{ steps.cargo-semver-checks-cache-key.outputs.key }}
+    # The key is computed from files that name the CPU (uname -m), HOME (a
+    # cache is restored to the absolute path it was saved from) and what
+    # is installed, as the orb's command computes it.
+    - name: Prepare cargo-shear cache key
+      id: cargo-shear-cache-key
+      if: contains(steps.tools.outputs.list, ' cargo-shear ') && (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/rust-quality-orb-cargo-shear-cache-key
+        PARAM_VERSION: ${{ inputs.cargo_shear_version }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/cache_key.sh"
+        # Bump the version in the key when an existing checksum table entry
+        # changes, so caches saved for the old bytes stop being restored.
+        printf 'key=rust-quality-orb-cargo-shear-v1-%s\n' "$(sha256sum < "${RUNNER_TEMP}/rust-quality-orb-cargo-shear-cache-key" | cut -c1-64)" >> "${GITHUB_OUTPUT}"
+    - name: Restore cargo-shear cache
+      id: cargo-shear-restore
+      if: contains(steps.tools.outputs.list, ' cargo-shear ') && (inputs.caching == 'true' || inputs.caching == '1')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-cargo-shear
+        key: ${{ steps.cargo-shear-cache-key.outputs.key }}
+    - name: Install cargo-shear
+      if: contains(steps.tools.outputs.list, ' cargo-shear ')
+      shell: bash
+      env:
+        PARAM_CACHING: ${{ inputs.caching }}
+        PARAM_DOWNLOAD_BASE_URL: ${{ inputs.download_base_url }}
+        PARAM_INSTALL_PATH: ${{ inputs.install_path }}
+        PARAM_VERIFY_CHECKSUMS: ${{ inputs.verify_checksums }}
+        PARAM_VERSION: ${{ inputs.cargo_shear_version }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/install/cargo-shear/install.sh"
+    # A saved cache can't be replaced, so it is only saved when none was
+    # restored. Like the orb's save_cache, it is saved right after the
+    # step, not at the end of the job.
+    - name: Save cargo-shear cache
+      if: contains(steps.tools.outputs.list, ' cargo-shear ') && (inputs.caching == 'true' || inputs.caching == '1') && steps.cargo-shear-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-cargo-shear
+        key: ${{ steps.cargo-shear-cache-key.outputs.key }}

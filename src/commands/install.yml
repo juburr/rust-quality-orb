@@ -1,0 +1,215 @@
+description: >
+  Installs the tools named in tools, each verified against this orb's
+  checksum table, through the install command for that tool (install_rust,
+  install_rustup, install_cargo_nextest, ...), which can also be used on its
+  own. The five cargo tools are their static release binaries, for amd64 or
+  arm64, picked from the machine's CPU architecture. A toolchain comes from
+  rust (one pinned Rust release, without rustup) or rustup (rustup and a
+  toolchain it installs), or from the image, such as cimg/rust. Run this
+  before the orb's other commands.
+parameters:
+  tools:
+    type: string
+    default: "cargo-nextest,cargo-llvm-cov,cargo-hack,cargo-semver-checks,cargo-shear"
+    description: >
+      The tools to install, separated by commas or spaces: any of rust or
+      rustup (not both), cargo-nextest, cargo-llvm-cov, cargo-hack,
+      cargo-semver-checks and cargo-shear. An unknown name fails the step.
+      The toolchain installs first.
+  caching:
+    type: boolean
+    default: true
+    description: >
+      Cache each tool's verified download between jobs. Only verified files
+      are cached, and a cached file is verified again before it is used.
+  download_base_url:
+    type: string
+    default: ""
+    description: >
+      Base URL of an internal mirror of GitHub releases, such as an
+      Artifactory or Nexus remote repository, to download the cargo tools
+      from instead of https://github.com. It replaces https://github.com in
+      the release URL, so the mirror must serve the same paths. It must be an
+      https:// URL, without credentials (user:password@) or a query or
+      fragment, which would show in the log. What is downloaded is still
+      verified against this orb's checksum table.
+  rust_download_base_url:
+    type: string
+    default: ""
+    description: >
+      Base URL of an internal mirror of https://static.rust-lang.org, to
+      download Rust or rustup, and rustup's toolchains, from. The same rules
+      as download_base_url apply.
+  install_path:
+    type: string
+    default: ""
+    description: >
+      Absolute path of the directory to install the cargo tools into. It is
+      created if needed and added to the PATH of later steps when it isn't
+      already on it, and must be writable without root. Environment variables
+      are expanded. Defaults to $HOME/.rust-quality-orb/bin, which goes first
+      on the PATH, ahead of copies in ~/.cargo/bin.
+  rust_install_path:
+    type: string
+    default: ""
+    description: >
+      With rust, the directory to install Rust into (the toolchain's root),
+      defaulting to $HOME/.rust-quality-orb/rust; with rustup, rustup's
+      CARGO_HOME, defaulting to CARGO_HOME or $HOME/.cargo. Environment
+      variables are expanded.
+  verify_checksums:
+    type: enum
+    enum: ["false", "known_versions", "strict"]
+    default: strict
+    description: >
+      SHA-512 verification against this orb's checksum table, for every tool.
+      "strict" (default) fails before downloading anything when a version has
+      no checksum in the table. "known_versions" verifies listed versions and
+      installs unlisted versions unverified, with a warning. "false" skips
+      verification and is not recommended.
+  components:
+    type: string
+    default: "clippy,rustfmt"
+    description: >
+      With rust or rustup, the toolchain components to install besides rustc,
+      cargo and the standard library, separated by commas or spaces: clippy
+      (the lint command), rustfmt (fmt), llvm-tools (coverage), rust-src.
+      Environment variables are expanded.
+  targets:
+    type: string
+    default: ""
+    description: >
+      With rust or rustup, the targets to install the standard library for
+      besides the machine's own, separated by commas or spaces. Environment
+      variables are expanded.
+  toolchain:
+    type: string
+    default: ""
+    description: >
+      With rustup, the toolchain to install, such as stable or
+      nightly-2026-10-01. Empty (the default) installs the one
+      rust-toolchain.toml names, or else stable. Environment variables are
+      expanded.
+  rust_version:
+    type: string
+    default: "1.99.1"
+    description: The Rust release, when tools names rust. Environment variables are expanded.
+  rustup_version:
+    type: string
+    default: "1.29.2"
+    description: The rustup version, when tools names rustup. Environment variables are expanded.
+  cargo_nextest_version:
+    type: string
+    default: "0.9.149"
+    description: The cargo-nextest version, when tools names it. Environment variables are expanded.
+  cargo_llvm_cov_version:
+    type: string
+    default: "0.9.1"
+    description: The cargo-llvm-cov version, when tools names it. Environment variables are expanded.
+  cargo_hack_version:
+    type: string
+    default: "0.6.45"
+    description: The cargo-hack version, when tools names it. Environment variables are expanded.
+  cargo_semver_checks_version:
+    type: string
+    default: "0.51.0"
+    description: The cargo-semver-checks version, when tools names it. Environment variables are expanded.
+  cargo_shear_version:
+    type: string
+    default: "1.14.0"
+    description: The cargo-shear version, when tools names it. Environment variables are expanded.
+steps:
+  - run:
+      name: Check the tools to install
+      environment:
+        PARAM_TOOLS: << parameters.tools >>
+      command: << include(scripts/install_tools.sh) >>
+  - when:
+      condition:
+        matches:
+          pattern: "^(.*[ ,])?rust([ ,].*)?$"
+          value: << parameters.tools >>
+      steps:
+        - install_rust:
+            caching: << parameters.caching >>
+            components: << parameters.components >>
+            download_base_url: << parameters.rust_download_base_url >>
+            install_path: << parameters.rust_install_path >>
+            targets: << parameters.targets >>
+            verify_checksums: << parameters.verify_checksums >>
+            version: << parameters.rust_version >>
+  - when:
+      condition:
+        matches:
+          pattern: "^(.*[ ,])?rustup([ ,].*)?$"
+          value: << parameters.tools >>
+      steps:
+        - install_rustup:
+            caching: << parameters.caching >>
+            components: << parameters.components >>
+            download_base_url: << parameters.rust_download_base_url >>
+            install_path: << parameters.rust_install_path >>
+            targets: << parameters.targets >>
+            toolchain: << parameters.toolchain >>
+            verify_checksums: << parameters.verify_checksums >>
+            version: << parameters.rustup_version >>
+  - when:
+      condition:
+        matches:
+          pattern: "^(.*[ ,])?cargo-nextest([ ,].*)?$"
+          value: << parameters.tools >>
+      steps:
+        - install_cargo_nextest:
+            caching: << parameters.caching >>
+            download_base_url: << parameters.download_base_url >>
+            install_path: << parameters.install_path >>
+            verify_checksums: << parameters.verify_checksums >>
+            version: << parameters.cargo_nextest_version >>
+  - when:
+      condition:
+        matches:
+          pattern: "^(.*[ ,])?cargo-llvm-cov([ ,].*)?$"
+          value: << parameters.tools >>
+      steps:
+        - install_cargo_llvm_cov:
+            caching: << parameters.caching >>
+            download_base_url: << parameters.download_base_url >>
+            install_path: << parameters.install_path >>
+            verify_checksums: << parameters.verify_checksums >>
+            version: << parameters.cargo_llvm_cov_version >>
+  - when:
+      condition:
+        matches:
+          pattern: "^(.*[ ,])?cargo-hack([ ,].*)?$"
+          value: << parameters.tools >>
+      steps:
+        - install_cargo_hack:
+            caching: << parameters.caching >>
+            download_base_url: << parameters.download_base_url >>
+            install_path: << parameters.install_path >>
+            verify_checksums: << parameters.verify_checksums >>
+            version: << parameters.cargo_hack_version >>
+  - when:
+      condition:
+        matches:
+          pattern: "^(.*[ ,])?cargo-semver-checks([ ,].*)?$"
+          value: << parameters.tools >>
+      steps:
+        - install_cargo_semver_checks:
+            caching: << parameters.caching >>
+            download_base_url: << parameters.download_base_url >>
+            install_path: << parameters.install_path >>
+            verify_checksums: << parameters.verify_checksums >>
+            version: << parameters.cargo_semver_checks_version >>
+  - when:
+      condition:
+        matches:
+          pattern: "^(.*[ ,])?cargo-shear([ ,].*)?$"
+          value: << parameters.tools >>
+      steps:
+        - install_cargo_shear:
+            caching: << parameters.caching >>
+            download_base_url: << parameters.download_base_url >>
+            install_path: << parameters.install_path >>
+            verify_checksums: << parameters.verify_checksums >>
+            version: << parameters.cargo_shear_version >>

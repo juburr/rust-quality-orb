@@ -1,0 +1,150 @@
+name: Measure Rust test coverage
+description: >
+  Measures line coverage with cargo-llvm-cov, running the tests (with
+  cargo-nextest when nextest is true) on an instrumented build, and writes
+  lcov, Cobertura, JSON or HTML reports, failing when coverage is below
+  coverage_min. Needs cargo-llvm-cov and the toolchain's llvm-tools component
+  (install_rust or install_rustup components: llvm-tools). Tests that fail, or
+  don't build, fail the step whatever report_only says, since coverage can't
+  be measured, and so does measuring no lines at all. The GitHub Actions twin
+  of the orb's coverage command.
+author: juburr
+
+inputs:
+  all_features:
+    description: >
+      Enable every feature (--all-features).
+    default: "false"
+  coverage_min:
+    description: >
+      The lowest line coverage that passes, as a percentage such as 80 or
+      82.5. Empty reports coverage without a minimum.
+    default: ""
+  extra_args:
+    description: >
+      More cargo llvm-cov arguments, split like shell words. Nothing in them
+      is expanded or run. They go to the test run. Options that change the
+      reports (--json, --lcov, --cobertura, --html, --text, --output-path,
+      --output-dir, --no-report, --fail-under-lines and the like) are refused.
+    default: ""
+  features:
+    description: >
+      Features to enable, separated by commas or spaces, as cargo's --features
+      takes them (package/feature for a dependency's).
+    default: ""
+  formats:
+    description: >
+      Reports to write besides <report_name>.json, separated by commas or
+      spaces: lcov (<report_name>.lcov), cobertura
+      (<report_name>.cobertura.xml) and html (<report_name>-html/).
+    default: lcov,cobertura
+  ignore_filename_regex:
+    description: >
+      Leave files whose path matches this regular expression out of the
+      reports and the total (--ignore-filename-regex), such as generated code.
+    default: ""
+  junit:
+    description: >
+      Also write JUnit XML, one test case for coverage_min, for a JUnit reader
+      such as a test report action.
+    default: "true"
+  locked:
+    description: >
+      Pass --locked, so cargo fails instead of changing a Cargo.lock that
+      doesn't match Cargo.toml. Needs a committed Cargo.lock.
+    default: "false"
+  nextest:
+    description: >
+      Run the tests with cargo-nextest (cargo llvm-cov nextest) instead of
+      cargo test. Needs cargo-nextest.
+    default: "false"
+  no_default_features:
+    description: >
+      Leave the default features off (--no-default-features).
+    default: "false"
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to the
+      artifact upload.
+    default: /tmp/rust-quality-reports
+  packages:
+    description: >
+      Workspace members to measure, by package name, separated by commas or
+      spaces. Empty (the default) means every member.
+    default: ""
+  report_name:
+    description: >
+      The reports' file name, without extension: <report_name>.json
+      (llvm-cov's summary) and the formats, <report_name>.run-record.json and
+      junit/<report_name>.xml. Give each run of this command in a job its own.
+    default: coverage
+  report_only:
+    description: >
+      Report findings without failing the step, to adopt the check gradually.
+      Tests that fail or don't build still fail it.
+    default: "false"
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which Cargo.toml and Cargo.lock, with which toolchain and settings, and
+      the coverage it measured.
+    default: "false"
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact, named
+      rust-quality-reports-<report_name> and a random suffix, including when
+      the step fails.
+    default: "true"
+  working_dir:
+    description: >
+      Directory to run in: the root of the Cargo workspace or package, or any
+      directory in it.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=rust-quality-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: cargo llvm-cov
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_ALL_FEATURES: ${{ inputs.all_features }}
+        PARAM_COVERAGE_MIN: ${{ inputs.coverage_min }}
+        PARAM_EXTRA_ARGS: ${{ inputs.extra_args }}
+        PARAM_FEATURES: ${{ inputs.features }}
+        PARAM_FORMATS: ${{ inputs.formats }}
+        PARAM_IGNORE_FILENAME_REGEX: ${{ inputs.ignore_filename_regex }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_LOCKED: ${{ inputs.locked }}
+        PARAM_NEXTEST: ${{ inputs.nextest }}
+        PARAM_NO_DEFAULT_FEATURES: ${{ inputs.no_default_features }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_PACKAGES: ${{ inputs.packages }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_ONLY: ${{ inputs.report_only }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/coverage.sh"
+        "SCRIPT_RUST_QUALITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/rust_quality.sh"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

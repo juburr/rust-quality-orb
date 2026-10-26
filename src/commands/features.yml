@@ -1,0 +1,154 @@
+description: >
+  Checks that each package builds with every feature on its own, or with every
+  combination of them, using cargo-hack (cargo hack check --each-feature or
+  --feature-powerset), for the machine's target and any in targets. Needs
+  cargo-hack (install with tools: cargo-hack). A combination that doesn't
+  build is a finding; cargo-hack failing, or a combination failing for a
+  reason other than the code (a target whose standard library isn't installed,
+  a download), fails the step whatever report_only says.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: >
+      Directory to run in: the root of the Cargo workspace or package, or any
+      directory in it.
+  packages:
+    type: string
+    default: ""
+    description: >
+      Workspace members to check, by package name, separated by commas or
+      spaces. Empty (the default) means every member. Environment variables
+      are expanded.
+  mode:
+    type: enum
+    enum: ["each_feature", "feature_powerset"]
+    default: each_feature
+    description: >
+      each_feature builds each feature on its own (and with no features, the
+      default ones and all of them), --each-feature; feature_powerset builds
+      every combination of them up to depth, --feature-powerset.
+  depth:
+    type: string
+    default: "2"
+    description: >
+      With feature_powerset, the largest number of features combined
+      (--depth). Empty combines all of them, which grows exponentially.
+  subcommand:
+    type: enum
+    enum: ["check", "clippy", "build", "test"]
+    default: check
+    description: >
+      The cargo command to run for each combination: check, clippy, build or
+      test.
+  no_dev_deps:
+    type: boolean
+    default: true
+    description: >
+      Leave dev-dependencies out (--no-dev-deps), so their features don't hide
+      a combination that only builds with them. cargo-hack removes them from
+      Cargo.toml while it runs and restores the file after. Only with
+      subcommand check or build.
+  skip_features:
+    type: string
+    default: ""
+    description: >
+      Features never to enable, separated by commas or spaces (--skip).
+      Environment variables are expanded.
+  targets:
+    type: string
+    default: ""
+    description: >
+      Targets to check besides the machine's own, separated by commas or
+      spaces, such as wasm32-unknown-unknown. Each needs its standard library
+      installed (install_rust or install_rustup targets). Environment
+      variables are expanded.
+  locked:
+    type: boolean
+    default: false
+    description: >
+      Pass --locked, so cargo fails instead of changing a Cargo.lock that
+      doesn't match Cargo.toml. Needs a committed Cargo.lock.
+  extra_args:
+    type: string
+    default: ""
+    description: >
+      More cargo hack arguments, split like shell words. Nothing in them is
+      expanded or run; environment variables are expanded before splitting.
+      --each-feature and --feature-powerset (mode sets them), and
+      --keep-going, --log-group, --color and --print-command-list, which
+      change the report, are refused.
+  output_dir:
+    type: string
+    default: /tmp/rust-quality-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  report_name:
+    type: string
+    default: features
+    description: >
+      The reports' file name, without extension: <report_name>.json (each
+      combination and its result) and <report_name>.log (cargo-hack's output),
+      <report_name>.run-record.json and junit/<report_name>.xml. Give each run
+      of this command in a job its own.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Also write JUnit XML, one test case per combination, and show it in
+      CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which Cargo.toml and Cargo.lock, with which toolchain and settings, and
+      which combinations failed.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report findings without failing the step, to adopt the check gradually.
+      cargo-hack failing before it runs cargo still fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: >
+      Store output_dir as job artifacts under rust-quality-reports/, including
+      when the step fails.
+steps:
+  - run:
+      name: cargo hack
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_DEPTH: << parameters.depth >>
+        PARAM_EXTRA_ARGS: << parameters.extra_args >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_LOCKED: << parameters.locked >>
+        PARAM_MODE: << parameters.mode >>
+        PARAM_NO_DEV_DEPS: << parameters.no_dev_deps >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_PACKAGES: << parameters.packages >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        PARAM_SKIP_FEATURES: << parameters.skip_features >>
+        PARAM_SUBCOMMAND: << parameters.subcommand >>
+        PARAM_TARGETS: << parameters.targets >>
+        SCRIPT_RUST_QUALITY_LIB: << include(scripts/lib/rust_quality.sh) >>
+      command: << include(scripts/features.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: rust-quality-reports
+            when: always

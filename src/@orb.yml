@@ -1,0 +1,12 @@
+version: 2.1
+
+description: >
+  Verified installs of Rust (a pinned release, or rustup), cargo-nextest, cargo-llvm-cov, cargo-hack,
+  cargo-semver-checks and cargo-shear, and commands that hold Rust code to a standard on every commit: formatting,
+  clippy lints with SARIF, tests with JUnit, coverage with a minimum, documentation warnings, the declared minimum
+  Rust version, feature combinations, unused dependencies and semver-breaking API changes, with run records. The same
+  commands ship as GitHub Actions.
+
+display:
+  home_url: "https://github.com/juburr/rust-quality-orb"
+  source_url: "https://github.com/juburr/rust-quality-orb"

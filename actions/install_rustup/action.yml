@@ -1,0 +1,119 @@
+name: Install rustup
+description: >
+  Installs rustup, verified against this orb's SHA-512 checksum table, and
+  then a Rust toolchain with it: the toolchain parameter, or else the one the
+  rust-toolchain.toml of the job's working directory names, or else stable.
+  rustup checks each toolchain file it downloads against the SHA-256 its
+  channel manifest lists. A rustup already installed (as on cimg/rust) is
+  replaced by the verified one, and its toolchains stay. Use install_rust
+  instead to pin a Rust release with this orb's own checksum table. The GitHub
+  Actions twin of the orb's install_rustup command.
+author: juburr
+
+inputs:
+  caching:
+    description: >
+      Cache the downloaded rustup-init between jobs, keyed by version, CPU
+      architecture and home directory. Only verified files are cached, and a
+      cached file is verified again before it is used. Toolchains are not
+      cached.
+    default: "true"
+  components:
+    description: >
+      Components to install with the toolchain, separated by commas or spaces,
+      by their rustup names: clippy (the lint command), rustfmt (fmt),
+      llvm-tools (coverage), and any other rustup has. A rust-toolchain.toml
+      can list more.
+    default: clippy,rustfmt
+  download_base_url:
+    description: >
+      Base URL of an internal mirror of https://static.rust-lang.org, such as
+      an Artifactory or Nexus remote repository. It replaces
+      https://static.rust-lang.org in the rustup-init URL, and becomes
+      RUSTUP_DIST_SERVER for the toolchain downloads, here and in later steps,
+      unless RUSTUP_DIST_SERVER is already set. It must be an https:// URL,
+      without credentials (user:password@) or a query or fragment, which would
+      show in the log.
+    default: ""
+  install_path:
+    description: >
+      Absolute path of rustup's CARGO_HOME, whose bin directory gets rustup
+      and a proxy for each toolchain binary (cargo, rustc, ...) and is added
+      to the PATH of later steps when it isn't already on it. It must be
+      writable without root. Defaults to $HOME/.cargo. When CARGO_HOME is set,
+      it is the default instead. Toolchains go in RUSTUP_HOME, or else
+      $HOME/.rustup, or without HOME a .rustup directory beside install_path.
+    default: ""
+  targets:
+    description: >
+      Targets to install the standard library for besides the machine's own,
+      separated by commas or spaces, such as x86_64-unknown-linux-musl or
+      wasm32-unknown-unknown, for the features command's targets.
+    default: ""
+  toolchain:
+    description: >
+      The toolchain to install and make the default, such as stable, 1.99.1,
+      beta or nightly-2026-10-01. Empty (the default) installs the one the
+      rust-toolchain.toml of the working directory names, with the components
+      and targets it lists, or else stable. none installs rustup alone.
+    default: ""
+  verify_checksums:
+    description: >
+      SHA-512 verification of rustup-init against this orb's checksum table.
+      "strict" (default) fails before downloading anything when the version
+      has no checksum in the table. "known_versions" verifies listed versions
+      and installs unlisted versions unverified, with a warning. "false" skips
+      verification and is not recommended.
+    default: strict
+  version:
+    description: >
+      Version of rustup to install, such as 1.29.2: 1.28.0 or newer. A leading
+      "v" is ignored.
+    default: "1.29.2"
+
+runs:
+  using: composite
+  steps:
+    # The key is computed from files that name the CPU (uname -m), HOME (a
+    # cache is restored to the absolute path it was saved from) and what
+    # is installed, as the orb's command computes it.
+    - name: Prepare rustup cache key
+      id: cache-key
+      if: (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/rust-quality-orb-rustup-cache-key
+        PARAM_VERSION: ${{ inputs.version }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/cache_key.sh"
+        # Bump the version in the key when an existing checksum table entry
+        # changes, so caches saved for the old bytes stop being restored.
+        printf 'key=rust-quality-orb-rustup-v1-%s\n' "$(sha256sum < "${RUNNER_TEMP}/rust-quality-orb-rustup-cache-key" | cut -c1-64)" >> "${GITHUB_OUTPUT}"
+    - name: Restore rustup cache
+      id: restore
+      if: (inputs.caching == 'true' || inputs.caching == '1')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-rustup
+        key: ${{ steps.cache-key.outputs.key }}
+    - name: Install rustup
+      shell: bash
+      env:
+        PARAM_CACHING: ${{ inputs.caching }}
+        PARAM_COMPONENTS: ${{ inputs.components }}
+        PARAM_DOWNLOAD_BASE_URL: ${{ inputs.download_base_url }}
+        PARAM_INSTALL_PATH: ${{ inputs.install_path }}
+        PARAM_TARGETS: ${{ inputs.targets }}
+        PARAM_TOOLCHAIN: ${{ inputs.toolchain }}
+        PARAM_VERIFY_CHECKSUMS: ${{ inputs.verify_checksums }}
+        PARAM_VERSION: ${{ inputs.version }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/install/rustup/install.sh"
+    # A saved cache can't be replaced, so it is only saved when none was
+    # restored. Like the orb's save_cache, it is saved right after the
+    # step, not at the end of the job.
+    - name: Save rustup cache
+      if: (inputs.caching == 'true' || inputs.caching == '1') && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-rustup
+        key: ${{ steps.cache-key.outputs.key }}

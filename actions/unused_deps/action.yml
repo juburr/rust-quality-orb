@@ -1,0 +1,116 @@
+name: Find unused Rust dependencies
+description: >
+  Finds dependencies Cargo.toml declares that the code never uses,
+  dependencies in the wrong section (a dev-dependency the library uses, for
+  example), and source files no module includes, with cargo-shear, which
+  parses the source without compiling it. Needs cargo-shear (install with
+  tools: cargo-shear). Mark false positives, such as a crate only a macro
+  uses, in Cargo.toml's [package.metadata.cargo-shear] ignored. cargo-shear
+  failing fails the step whatever report_only says. The GitHub Actions twin of
+  the orb's unused_deps command.
+author: juburr
+
+inputs:
+  deny_warnings:
+    description: >
+      Count cargo-shear's warnings (empty files, unused optional dependencies)
+      as findings too (--deny-warnings), not just its errors.
+    default: "false"
+  extra_args:
+    description: >
+      More cargo shear arguments, split like shell words. Nothing in them is
+      expanded or run. Options that change the check or its output (--format,
+      --fix, --deny-warnings) are refused, and so is a directory: it checks
+      working_dir.
+    default: ""
+  junit:
+    description: >
+      Also write JUnit XML, one failing test case per finding, for a JUnit
+      reader such as a test report action.
+    default: "true"
+  locked:
+    description: >
+      Pass --locked, so cargo fails instead of changing a Cargo.lock that
+      doesn't match Cargo.toml. Needs a committed Cargo.lock.
+    default: "false"
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to the
+      artifact upload.
+    default: /tmp/rust-quality-reports
+  packages:
+    description: >
+      Workspace members to check, by package name, separated by commas or
+      spaces. Empty (the default) means every member.
+    default: ""
+  report_name:
+    description: >
+      The reports' file name, without extension: <report_name>.json
+      (cargo-shear's report, with each finding's line and column) and
+      <report_name>.log (its log), <report_name>.run-record.json and
+      junit/<report_name>.xml. Give each run of this command in a job its own.
+    default: unused-deps
+  report_only:
+    description: >
+      Report findings without failing the step, to adopt the check gradually.
+      cargo-shear failing still fails it.
+    default: "false"
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which Cargo.toml and Cargo.lock, with which toolchain and settings, and
+      what it found.
+    default: "false"
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact, named
+      rust-quality-reports-<report_name> and a random suffix, including when
+      the step fails.
+    default: "true"
+  working_dir:
+    description: >
+      Directory to run in: the root of the Cargo workspace or package, or any
+      directory in it.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=rust-quality-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: cargo shear
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_DENY_WARNINGS: ${{ inputs.deny_warnings }}
+        PARAM_EXTRA_ARGS: ${{ inputs.extra_args }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_LOCKED: ${{ inputs.locked }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_PACKAGES: ${{ inputs.packages }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_ONLY: ${{ inputs.report_only }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/unused_deps.sh"
+        "SCRIPT_RUST_QUALITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/rust_quality.sh"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

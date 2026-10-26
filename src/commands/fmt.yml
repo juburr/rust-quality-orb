@@ -1,0 +1,95 @@
+description: >
+  Checks that every file is formatted as rustfmt would format it (cargo fmt
+  --check), following rustfmt.toml and each package's edition, and reports the
+  files it would change, with the diff. Needs the rustfmt component. A file
+  rustfmt can't parse fails the step whatever report_only says.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: >
+      Directory to run in: the root of the Cargo workspace or package, or any
+      directory in it.
+  packages:
+    type: string
+    default: ""
+    description: >
+      Workspace members to check, by package name, separated by commas or
+      spaces. Empty (the default) means every member. Environment variables
+      are expanded.
+  extra_args:
+    type: string
+    default: ""
+    description: >
+      More rustfmt arguments, split like shell words. Nothing in them is
+      expanded or run; environment variables are expanded before splitting.
+      They go after --, as rustfmt options such as --config. Options that
+      change the check or its output (--check, --emit, -l, --files-with-diff,
+      --message-format) are refused.
+  output_dir:
+    type: string
+    default: /tmp/rust-quality-reports
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to
+      store_artifacts and store_test_results.
+  report_name:
+    type: string
+    default: fmt
+    description: >
+      The reports' file name, without extension: <report_name>.json (the
+      files) and <report_name>.diff (the changes),
+      <report_name>.run-record.json and junit/<report_name>.xml. Give each run
+      of this command in a job its own.
+  junit:
+    type: boolean
+    default: true
+    description: >
+      Also write JUnit XML, one failing test case per file, and show it in
+      CircleCI's Tests tab.
+  run_record:
+    type: boolean
+    default: false
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which Cargo.toml and Cargo.lock, with which toolchain and settings, and
+      which files it would change.
+  report_only:
+    type: boolean
+    default: false
+    description: >
+      Report findings without failing the step, to adopt the check gradually.
+      A file rustfmt can't parse still fails it.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: >
+      Store output_dir as job artifacts under rust-quality-reports/, including
+      when the step fails.
+steps:
+  - run:
+      name: rustfmt
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_EXTRA_ARGS: << parameters.extra_args >>
+        PARAM_JUNIT: << parameters.junit >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_PACKAGES: << parameters.packages >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_ONLY: << parameters.report_only >>
+        PARAM_RUN_RECORD: << parameters.run_record >>
+        SCRIPT_RUST_QUALITY_LIB: << include(scripts/lib/rust_quality.sh) >>
+      command: << include(scripts/fmt.sh) >>
+  - when:
+      condition: << parameters.junit >>
+      steps:
+        - store_test_results:
+            path: << parameters.output_dir >>/junit/<< parameters.report_name >>.xml
+            when: always
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: rust-quality-reports
+            when: always

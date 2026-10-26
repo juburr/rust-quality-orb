@@ -1,0 +1,24 @@
+description: >
+  Follow rust-toolchain.toml with rustup: install with tools: rustup installs
+  rustup itself from its release, verified against this orb's checksum table,
+  then the toolchain the file names, with its components and targets. With no
+  rust-toolchain.toml, it installs stable, or the toolchain parameter's.
+
+usage:
+  version: 2.1
+  orbs:
+    rust-quality: juburr/rust-quality-orb@0.1.0
+  jobs:
+    quality:
+      machine:
+        image: ubuntu-2404:current
+      steps:
+        - checkout
+        - rust-quality/install:
+            tools: rustup cargo-nextest
+        - rust-quality/lint
+        - rust-quality/test
+  workflows:
+    quality:
+      jobs:
+        - quality
