@@ -6,7 +6,8 @@ description: >
   coverage_min. Needs cargo-llvm-cov and the toolchain's llvm-tools component
   (install_rust or install_rustup components: llvm-tools). Tests that fail, or
   don't build, fail the step whatever report_only says, since coverage can't
-  be measured. The GitHub Actions twin of the orb's coverage command.
+  be measured, and so does measuring no lines at all. The GitHub Actions twin
+  of the orb's coverage command.
 author: juburr
 
 inputs:

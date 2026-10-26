@@ -60,7 +60,9 @@ echo "Checking the formatting of ${RQ_PACKAGES[*]:-the workspace} with ${RQ_TOOL
 RC=0
 CARGO_TERM_COLOR=never "${RQ_CARGO}" "${RQ_ARGS[@]}" > "${RQ_WORK}/files" 2> "${RQ_WORK}/err" || RC=$?
 # Paths come absolute; the report has them relative to the workspace root.
-awk -v root="${RQ_WORKSPACE_ROOT%/}/" 'NF { if (index($0, root) == 1) print substr($0, length(root) + 1); else print }' \
+# A file whose only problem is its line endings comes as "Incorrect newline
+# style in <path>".
+awk -v root="${RQ_WORKSPACE_ROOT%/}/" 'NF { sub(/^Incorrect newline style in /, ""); if (index($0, root) == 1) print substr($0, length(root) + 1); else print }' \
     "${RQ_WORK}/files" | sort -u > "${RQ_WORK}/relative"
 mapfile -t FILES < "${RQ_WORK}/relative"
 ERROR=false

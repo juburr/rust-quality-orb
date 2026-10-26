@@ -321,7 +321,7 @@ Runs clippy and reports every lint it and rustc find: the default ones, those th
 
 ### `rust-quality/docs`
 
-Builds the documentation (`cargo doc --no-deps`) and reports every warning rustdoc and rustc give: broken intra-doc links, bare URLs, invalid code blocks and HTML, and `missing_docs` where a crate asks for it. `RUSTDOCFLAGS` and `build.rustdocflags` apply as set: a lint they deny stops rustdoc at that crate and still counts as findings, not as a failure to build.
+Builds the documentation (`cargo doc --no-deps`) and reports every lint rustdoc gives: broken intra-doc links, bare URLs, invalid code blocks and HTML, and `missing_docs` where a crate asks for it. Compiler warnings from the type-check cargo doc runs on the libraries other targets need are left to `lint`. `RUSTDOCFLAGS` and `build.rustdocflags` apply as set: a lint they deny stops rustdoc at that package and still counts as findings, not as a failure to build, and with cargo 1.74 or later the other packages are still documented. Code that doesn't compile, a build script that fails, or a package left undocumented fails the step whatever `report_only` says.
 
 | Parameter | Default | Description |
 | --- | --- | --- |
@@ -337,7 +337,7 @@ Runs the tests with cargo-nextest, then the doctests, which nextest doesn't run,
 | `profile` | `default` | The nextest profile, from `.config/nextest.toml`. |
 | `filter` | *(empty)* | A nextest filterset choosing the tests (`-E`), such as `not test(slow)`. |
 | `retries` | *(empty)* | How many times to retry a failing test; one that passes on a retry is flaky, which passes with a warning. |
-| `no_tests` | `fail` | What to do when no test runs: `fail`, `warn` or `pass`. |
+| `no_tests` | `fail` | What to do when no test runs: `fail`, `warn` or `pass`. When `partition` splits the run, `fail` becomes `warn`, since a node's share can be empty. |
 | `doctests` | `true` | Run the doctests too, on the first node only when `partition` splits the run. |
 | `partition` | `false` | Split the tests across the job's parallel nodes (`--partition hash:<node>/<total>`). |
 | `report_name` | `nextest` | Writes `<report_name>.json` (the counts and failing tests), `<report_name>.log`, `<report_name>.doctests.log`, and `junit/<report_name>/` with `nextest.xml` and `doctests.xml`. |
@@ -346,7 +346,7 @@ Runs the tests with cargo-nextest, then the doctests, which nextest doesn't run,
 
 ### `rust-quality/coverage`
 
-Measures line coverage with cargo-llvm-cov: the tests run once on an instrumented build, with `cargo test` or cargo-nextest, then each report is written from that run. Coverage below `coverage_min` is a finding; tests that fail, or don't build, leave no coverage to measure and fail the step whatever `report_only` says. Needs cargo-llvm-cov and the `llvm-tools` component.
+Measures line coverage with cargo-llvm-cov: the tests run once on an instrumented build, with `cargo test` or cargo-nextest, then each report is written from that run. Coverage below `coverage_min` is a finding; tests that fail, or don't build, leave no coverage to measure and fail the step whatever `report_only` says, and so does measuring no lines at all. `--release`, `--profile`, `--target` and `--doctests` in `extra_args` go to the report too. Needs cargo-llvm-cov and the `llvm-tools` component.
 
 | Parameter | Default | Description |
 | --- | --- | --- |
@@ -358,7 +358,7 @@ Measures line coverage with cargo-llvm-cov: the tests run once on an instrumente
 
 ### `rust-quality/msrv`
 
-Checks each package with the Rust version its Cargo.toml declares as `rust-version` (or with `rust_version`): `cargo check`, one run per version, on the packages that declare it. A package that doesn't build on its version is a finding; a toolchain that can't be installed fails the step whatever `report_only` says.
+Checks each package with the Rust version its Cargo.toml declares as `rust-version` (or with `rust_version`): `cargo check`, one run per version, on the packages that declare it, with that toolchain's own rustc whatever comes first on the `PATH`. A package that doesn't build on its version (rustc or a build script fails, or a dependency needs a newer Rust) is a finding; a toolchain that can't be installed, or a check that fails for another reason, such as a dependency that can't be fetched, fails the step whatever `report_only` says.
 
 | Parameter | Default | Description |
 | --- | --- | --- |
@@ -370,7 +370,7 @@ Checks each package with the Rust version its Cargo.toml declares as `rust-versi
 
 ### `rust-quality/features`
 
-Checks that each package builds with every feature on its own, or every combination of them, with cargo-hack: one run per target, with `--keep-going` so one combination that fails doesn't hide the rest. cargo-hack failing before it runs cargo fails the step whatever `report_only` says. Needs cargo-hack.
+Checks that each package builds with every feature on its own, or every combination of them, with cargo-hack: one run per target, with `--keep-going` so one combination that fails doesn't hide the rest. A combination that rustc, a build script or a test fails is a finding; cargo-hack failing, or a combination failing for another reason (a target whose standard library isn't installed, a download), fails the step whatever `report_only` says. Needs cargo-hack.
 
 | Parameter | Default | Description |
 | --- | --- | --- |
@@ -477,7 +477,7 @@ A run record is a JSON document, described by [`schemas/run-record.v1.json`](sch
 
 - **Least Privilege**: Installs to user-owned directories by default, Rust included, with no `sudo` usage anywhere in this orb. Everything runs as the job's user.
 - **Integrity**: SHA-512 checksum validation of every tool, on by default and failing closed: a version this orb has no checksum for is refused before anything is downloaded, and a download that doesn't match is never installed. For Rust, the table pins the release's channel manifest, and every component is checked against the SHA-256 the manifest lists for it, from the cache too. See [Checksum Verification](#-checksum-verification).
-- **Fail closed**: a tool that can't complete fails the step even with `report_only`, and so do the ways these tools pass while checking nothing: a clippy or rustdoc build that stopped on code that doesn't compile, a nextest run with no tests, a test run that failed under coverage, a cargo-hack that failed before running cargo, and a cargo-semver-checks run that checked no package.
+- **Fail closed**: a tool that can't complete fails the step even with `report_only`, and so do the ways these tools pass while checking nothing: a clippy or rustdoc build that stopped on code that doesn't compile or a failing build script, a package cargo doc never documented, a nextest run with no tests, a test run that failed under coverage or one that measured no lines, a feature combination or Rust version that failed for a reason other than the code, and a cargo-semver-checks run that checked no package.
 - **Confidentiality**: No check needs a secret. `extra_args` and the lists are split without running anything in them, so a value that reached one through an environment variable, such as a branch name, can't run a command. Mirror URLs with credentials, a query or a fragment are refused before they reach the log, and run records drop them from arguments. The GitHub Actions pass inputs to the scripts as environment variables, never pasting them into a script, and pin every action they use to a commit SHA.
 - **Privacy**: No usage data of any kind is collected or shipped back to the orb developer.
 

@@ -9,7 +9,10 @@
 # fails prints an error before the next, and a run in which combinations
 # failed ends with "failed to run N commands". A run that fails without that
 # summary is cargo-hack failing, which fails the step whatever report_only
-# says.
+# says, and so is a combination that failed for a reason other than the
+# code (a target whose standard library isn't installed, a download, a
+# stale Cargo.lock with locked): only rustc, a build script or a test
+# failing makes a combination a finding.
 
 set -euo pipefail
 
@@ -69,6 +72,15 @@ for target in ${RQ_LIST[@]+"${RQ_LIST[@]}"}; do
     TARGETS+=("${target}")
 done
 rq_output "${PARAM_OUTPUT_DIR}" "${PARAM_REPORT_NAME}"
+# The per-target logs an earlier run listed, since this run's targets can
+# differ.
+if [[ -f "${RQ_BASE}.json" ]]; then
+    while IFS= read -r log; do
+        if [[ "${log}" == "${RQ_BASE}-"*.log && "${log}" != */../* ]]; then
+            rm -f -- "${log}"
+        fi
+    done < <(jq -r '.logs[]? // empty' "${RQ_BASE}.json" 2> /dev/null || true)
+fi
 rq_clear_reports .log .json
 rq_require_jq
 rq_cargo
@@ -110,9 +122,19 @@ for target in "${TARGETS[@]}"; do
     RC=0
     CARGO=${RQ_CARGO} CARGO_TERM_COLOR=never "${HACK}" "${args[@]}" > "${log}" 2>&1 || RC=$?
     # Each combination, from its "info: running `...` on <package> (i/n)"
-    # line, failed when an error line follows it before the next one.
+    # line: passed without an error line before the next one; failed when
+    # rustc, a build script or a test failed (cargo's "could not compile",
+    # "failed to run custom build command" or "test failed"), unless the
+    # target isn't installed; error for any other failure, with its first
+    # error line.
     found=$(awk -v target="${target}" '
-        function emit() { if (command != "") printf "%s\t%s\t%s\t%s\n", target, package, command, status; command = "" }
+        function emit() {
+            if (command == "") return
+            status = "passed"
+            if (bad) status = (code && !env) ? "failed" : "error"
+            printf "%s\t%s\t%s\t%s\t%s\n", target, package, command, status, first
+            command = ""
+        }
         /^info: running `/ {
             emit()
             line = $0
@@ -121,17 +143,26 @@ for target in "${TARGETS[@]}"; do
             package = line
             if (sub(/^[^`]*` on /, "", package)) sub(/ \([0-9]+\/[0-9]+\)$/, "", package)
             else package = ""
-            status = "passed"
+            bad = 0; code = 0; env = 0; first = ""
             next
         }
         /^failed to run [0-9]+ commands/ || /^error: failed to run [0-9]+ commands/ { emit(); summary = 1 }
-        !summary && command != "" && /^error/ { status = "failed" }
+        summary || command == "" { next }
+        /^error/ { bad = 1; if (first == "") { first = $0; gsub(/\t/, " ", first) } }
+        /^error: could not compile `/ || /failed to run custom build command for/ || /^error: test failed/ { code = 1 }
+        /target may not be installed/ { env = 1 }
         END { emit() }
-    ' "${log}" | jq -Rn '[inputs | split("\t") | {target: (if .[0] == "" then null else .[0] end), package: .[1], command: .[2], status: .[3]}]')
+    ' "${log}" | jq -Rn '[inputs | split("\t") | {target: (if .[0] == "" then null else .[0] end), package: .[1], command: .[2],
+        status: .[3], error: (if .[3] == "error" then .[4] else null end)}]')
     COMBINATIONS=$(jq -c --argjson found "${found}" '. + $found' <<< "${COMBINATIONS}")
     failed=$(jq '[.[] | select(.status == "failed")] | length' <<< "${found}")
     if [[ "${RC}" -ne 0 ]] && ! grep -qE '^(error: )?failed to run [0-9]+ commands' "${log}"; then
         ERROR="cargo-hack failed${target:+ for ${target}} before it could run every combination (exit code ${RC})"
+        break
+    fi
+    unchecked=$(jq -r 'map(select(.status == "error")) | first // empty | "\(.command) (\(.error))"' <<< "${found}")
+    if [[ -n "${unchecked}" ]]; then
+        ERROR="cargo-hack could not check ${unchecked}${target:+ for ${target}}, for a reason other than the code"
         break
     fi
     if [[ "${RC}" -ne 0 && "${failed}" -eq 0 ]]; then
@@ -142,15 +173,16 @@ for target in "${TARGETS[@]}"; do
 done
 
 REPORT="${RQ_BASE}.json"
-jq -n --argjson combinations "${COMBINATIONS}" --arg error "${ERROR}" '{combinations: $combinations,
-    error: (if $error == "" then null else $error end)}' > "${REPORT}"
+jq -n --argjson combinations "${COMBINATIONS}" --arg error "${ERROR}" --args '{combinations: $combinations,
+    error: (if $error == "" then null else $error end), logs: $ARGS.positional}' ${RQ_REPORTS[@]+"${RQ_REPORTS[@]}"} > "${REPORT}"
 RQ_REPORTS+=("${REPORT}")
 FAILED=$(jq '[.combinations[] | select(.status == "failed")] | length' "${REPORT}")
 if [[ "${JUNIT}" == true ]]; then
     rq_junit "${RQ_OUT}/junit/${PARAM_REPORT_NAME}.xml" features "$(jq -c '[.combinations[] | {classname: (.package
         + (if .target == null then "" else " (" + .target + ")" end)), name: .command,
-        status: (if .status == "failed" then "failed" else "passed" end),
-        message: (if .status == "failed" then "does not build with these features" else null end)}]' "${REPORT}")"
+        status: (if .status == "passed" then "passed" else "failed" end),
+        message: (if .status == "failed" then "does not build with these features"
+            elif .status == "error" then "could not be checked: \(.error)" else null end)}]' "${REPORT}")"
     RQ_REPORTS+=("${RQ_OUT}/junit/${PARAM_REPORT_NAME}.xml")
 fi
 

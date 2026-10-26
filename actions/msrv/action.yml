@@ -5,9 +5,11 @@ description: >
   with rust_version. The toolchain for it comes from rustup when rustup is on
   the PATH, or else is installed like install_rust does, verified against this
   orb's checksum table, into a directory of its own, so the job's toolchain
-  stays first on the PATH. A build that fails on that version is a finding; a
-  toolchain that can't be installed fails the step whatever report_only says.
-  The GitHub Actions twin of the orb's msrv command.
+  stays first on the PATH. A package that doesn't build on that version (rustc
+  or a build script fails, or a dependency needs a newer Rust) is a finding; a
+  toolchain that can't be installed, or a check that fails for another reason,
+  such as a dependency that can't be fetched, fails the step whatever
+  report_only says. The GitHub Actions twin of the orb's msrv command.
 author: juburr
 
 inputs:

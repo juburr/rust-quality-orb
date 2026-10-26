@@ -1,9 +1,10 @@
 description: >
-  Builds the documentation (cargo doc --no-deps) and reports every warning
-  rustdoc and rustc give: broken intra-doc links, invalid code blocks and
+  Builds the documentation (cargo doc --no-deps) and reports every lint
+  rustdoc gives: broken intra-doc links, bare URLs, invalid code blocks and
   HTML, and missing_docs where a crate asks for it. RUSTDOCFLAGS and
-  build.rustdocflags apply as set. Code that doesn't compile fails the step
-  whatever report_only says.
+  build.rustdocflags apply as set. Code that doesn't compile, a build script
+  that fails, and a package left undocumented fail the step whatever
+  report_only says.
 parameters:
   working_dir:
     type: string
@@ -53,7 +54,8 @@ parameters:
     description: >
       More cargo doc arguments, split like shell words. Nothing in them is
       expanded or run; environment variables are expanded before splitting.
-      --message-format and --open are refused.
+      --message-format, --open and --keep-going (which the command passes when
+      cargo has it) are refused.
   output_dir:
     type: string
     default: /tmp/rust-quality-reports

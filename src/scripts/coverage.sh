@@ -78,6 +78,22 @@ REPORT_ARGS=(llvm-cov report)
 if [[ -n "${IGNORE}" ]]; then
     REPORT_ARGS+=(--ignore-filename-regex "${IGNORE}")
 fi
+# report must find the objects the run built, so it gets the options in
+# extra_args that decide where they are and which run it reads.
+take_value=false
+for word in ${RQ_EXTRA_ARGS[@]+"${RQ_EXTRA_ARGS[@]}"}; do
+    if [[ "${take_value}" == true ]]; then
+        REPORT_ARGS+=("${word}")
+        take_value=false
+    elif [[ "${word}" == --release || "${word}" == -r || "${word}" == --doctests ]]; then
+        REPORT_ARGS+=("${word}")
+    elif [[ "${word}" == --profile || "${word}" == --target ]]; then
+        REPORT_ARGS+=("${word}")
+        take_value=true
+    elif [[ "${word}" == --profile=* || "${word}" == --target=* ]]; then
+        REPORT_ARGS+=("${word}")
+    fi
+done
 # shellcheck disable=SC2034 # read by rq_run_record
 RQ_INPUTS=()
 rq_workspace_inputs
@@ -134,8 +150,15 @@ BELOW=false
 if [[ -z "${ERROR}" ]]; then
     COUNT=$(jq '.data[0].totals.lines.count' "${REPORT}")
     COVERED=$(jq '.data[0].totals.lines.covered' "${REPORT}")
+    # No line measured at all, as when ignore_filename_regex matches every
+    # file, would read as complete coverage.
+    if [[ "${COUNT}" -eq 0 ]]; then
+        ERROR="cargo-llvm-cov measured no lines${IGNORE:+ (ignore_filename_regex may match every file)}"
+    fi
+fi
+if [[ -z "${ERROR}" ]]; then
     # Compared exactly: covered / count < minimum / 100, without rounding.
-    PERCENT=$(awk -v c="${COVERED}" -v n="${COUNT}" 'BEGIN { if (n == 0) print "100.00"; else printf "%.2f\n", 100 * c / n }')
+    PERCENT=$(awk -v c="${COVERED}" -v n="${COUNT}" 'BEGIN { printf "%.2f\n", 100 * c / n }')
     if [[ -n "${MINIMUM}" ]] && awk -v c="${COVERED}" -v n="${COUNT}" -v m="${MINIMUM}" 'BEGIN { exit !(100 * c < m * n) }'; then
         BELOW=true
     fi

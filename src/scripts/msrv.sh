@@ -5,9 +5,13 @@
 # with that version's toolchain, one run per version, on the packages that
 # declare it. The toolchain comes from rustup, or else is installed the way
 # install_rust installs it, verified, into a directory of this step's own,
-# so the job's toolchain stays the one on the PATH. A check that fails on
-# that version is a finding; a toolchain that can't be installed fails the
-# step whatever report_only says.
+# so the job's toolchain stays the one on the PATH. Either way cargo runs
+# with RUSTC and RUSTDOC naming that toolchain's own, since cargo would
+# otherwise run the first rustc on the PATH. A package that doesn't build on
+# its version is a finding; a toolchain that can't be installed, or a check
+# that fails for another reason (a dependency that can't be fetched, a
+# Cargo.lock that version's cargo can't read), fails the step whatever
+# report_only says.
 
 set -euo pipefail
 
@@ -37,6 +41,15 @@ case "${PARAM_TOOLCHAIN_SOURCE}" in
         ;;
 esac
 rq_output "${PARAM_OUTPUT_DIR}" "${PARAM_REPORT_NAME}"
+# The per-version logs an earlier run listed, since this run's versions can
+# differ.
+if [[ -f "${RQ_BASE}.json" ]]; then
+    while IFS= read -r log; do
+        if [[ "${log}" == "${RQ_BASE}-"*.log && "${log}" != */../* ]]; then
+            rm -f -- "${log}"
+        fi
+    done < <(jq -r '.versions[]?.log // empty' "${RQ_BASE}.json" 2> /dev/null || true)
+fi
 rq_clear_reports .json
 rq_require_jq
 rq_cargo
@@ -126,7 +139,12 @@ for version in "${VERSIONS[@]}"; do
             ERROR="rustup could not install the ${version} toolchain"
             break
         fi
-        cargo=("${RUSTUP}" run "${version}" cargo)
+        if ! rustc=$("${RUSTUP}" which --toolchain "${version}" rustc 2>> "${log}") \
+            || ! rustdoc=$("${RUSTUP}" which --toolchain "${version}" rustdoc 2>> "${log}"); then
+            ERROR="rustup could not find the rustc of the ${version} toolchain"
+            break
+        fi
+        cargo=(env "RUSTC=${rustc}" "RUSTDOC=${rustdoc}" "${RUSTUP}" run "${version}" cargo)
     else
         toolchain=$(rust_release "${version}")
         if [[ -z "${toolchain}" ]]; then
@@ -163,13 +181,24 @@ for version in "${VERSIONS[@]}"; do
     # shellcheck disable=SC2034 # read by rq_run_record
     RQ_ARGS=("${args[@]}")
     status=passed
+    start=$(wc -l < "${log}")
     if ! CARGO_TERM_COLOR=never "${cargo[@]}" "${args[@]}" >> "${log}" 2>&1; then
-        status=failed
-        FAILED=$((FAILED + 1))
         tail -n 30 "${log}" | sed 's/^/  /'
-        if grep -q 'lock file version' "${log}"; then
-            echo "  This cargo can't read Cargo.lock's format: Cargo.lock version 4 needs Rust 1.78. Write version 3 for older"
-            echo "  ones (cargo picks it when rust-version is older than 1.78, for a new Cargo.lock)."
+        # The code doesn't build on this version when rustc failed on it, a
+        # build script failed, or a dependency needs a newer Rust; anything
+        # else (a missing target, a download, an unreadable Cargo.lock) is
+        # the check failing.
+        output=$(tail -n "+$((start + 1))" "${log}")
+        if grep -qE 'error: could not compile `|failed to run custom build command for|cannot be built because it requires rustc|is not supported by the following package' <<< "${output}" \
+            && ! grep -q 'target may not be installed' <<< "${output}"; then
+            status=failed
+            FAILED=$((FAILED + 1))
+        else
+            ERROR="cargo check could not run with Rust ${version}"
+            if grep -q 'lock file version' <<< "${output}"; then
+                ERROR+=". Its cargo can't read Cargo.lock's format: Cargo.lock version 4 needs Rust 1.78. Write version 3 for older ones (cargo picks it when rust-version is older than 1.78, for a new Cargo.lock)"
+            fi
+            break
         fi
     fi
     RESULTS=$(jq -c --arg version "${version}" --arg toolchain "${toolchain}" --arg source "${SOURCE}" --arg status "${status}" \

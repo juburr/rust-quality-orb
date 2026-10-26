@@ -83,6 +83,17 @@ jobs:
               exit 1
             fi
             cargo --version
+      - run:
+          name: Verify msrv With rustup Checks With The Toolchain's rustc, Not The Pinned One
+          command: |
+            # The pinned 1.99.1 comes first on the PATH, and would build the dirty fixture's LazyLock.
+            if bash tests/run_command.sh msrv working_dir=tests/fixtures/dirty toolchain_source=rustup > /tmp/run.log 2>&1; then
+              cat /tmp/run.log
+              echo "FAIL: msrv passed on the dirty fixture with $(rustc --version) first on the PATH."
+              exit 1
+            fi
+            cat /tmp/run.log
+            grep -qF "fails on 1.70" /tmp/run.log
   # Installs rustup and a toolchain on an image without Rust: first one named by the toolchain
   # parameter, with a component and a target, then the one a rust-toolchain.toml names.
   rustup-test:

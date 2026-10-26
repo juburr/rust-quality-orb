@@ -502,33 +502,53 @@ rq_extra_args() {
 }
 
 # RQ_DIAGNOSTICS_JQ: turns the JSON messages cargo writes with
-# --message-format=json, read with jq -s, into the orb's summary:
-#   findings  every lint rustc, clippy or rustdoc reported, at warning or
-#             error level, once each (cargo reports a lint once per target
-#             that compiles the file, such as a lib and its tests)
-#   errors    everything else at error level: code that doesn't compile
-#   complete  whether the build ran to the end, or stopped only on lints that
-#             were denied (deny or forbid): anything else means the check
-#             couldn't run
+# --message-format=json, read with jq -s --argjson docs <true|false>, into the
+# orb's summary:
+#   findings    every lint the check counts, at warning or error level, once
+#               each (cargo reports a lint once per target that compiles the
+#               file, such as a lib and its tests): with docs false (lint),
+#               every rustc and clippy lint; with docs true, the lints
+#               rustdoc itself reports (rustdoc::* and the few rustc lints
+#               rustdoc turns on), since cargo doc also type-checks the
+#               libraries other documented targets need, and that check
+#               reports ordinary compiler warnings
+#   errors      everything else at an error level ("error", or an internal
+#               compiler error's "error: internal compiler error"): code
+#               that doesn't compile, and lints the check doesn't count that
+#               were denied and so stopped the build
+#   complete    whether the build ran to the end, or stopped only on counted
+#               lints that were denied (deny or forbid). docs.sh also
+#               checks that each package was documented or stopped that way,
+#               which a build script that fails, or a package cargo never
+#               got to, can't show here
+#   documented  the package IDs cargo documented (an artifact ending in
+#               index.html)
+#   stopped     the package IDs with a counted lint at error level
 # A lint is a diagnostic whose code is a lint name, such as dead_code,
 # clippy::needless_return or rustdoc::broken_intra_doc_links; errors have an
 # E0000-style code or none.
 # shellcheck disable=SC2016,SC2034 # jq program, read by lint.sh and docs.sh
 RQ_DIAGNOSTICS_JQ='
     def is_lint: type == "string" and test("^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)*$") and (test("^E[0-9]+$") | not);
-    [.[] | select(.reason == "compiler-message") | .message as $m
+    def counted: is_lint and (if $docs then startswith("rustdoc::") or (. as $code | ["missing_docs", "invalid_doc_attributes",
+        "unused_doc_comments", "renamed_and_removed_lints", "unknown_lints", "unexpected_cfgs", "duplicate_features",
+        "unused_features", "stable_features", "unfulfilled_lint_expectations"] | index($code) != null) else true end);
+    def is_error: type == "string" and startswith("error");
+    [.[] | select(.reason == "compiler-message") | .package_id as $package | .message as $m
         | ([($m.spans // [])[] | select(.is_primary)] | first) as $span
         | {level: $m.level, code: ($m.code.code // null), message: $m.message,
            rendered: ($m.rendered // $m.message), file: ($span.file_name // null),
            line: ($span.line_start // null), column: ($span.column_start // null),
-           end_line: ($span.line_end // null), end_column: ($span.column_end // null)}] as $messages
-    | ([$messages[] | select((.level == "warning" or .level == "error") and (.code | is_lint))]
+           end_line: ($span.line_end // null), end_column: ($span.column_end // null), package: ($package // null)}] as $messages
+    | ([$messages[] | select((.level == "warning" or .level == "error") and (.code | counted))]
         | unique_by([.code, .file, .line, .column, .message])) as $findings
-    | ([$messages[] | select(.level == "error" and (.code | is_lint | not))]
+    | ([$messages[] | select((.level | is_error) and (.code | counted | not))]
         | unique_by([.code, .file, .line, .column, .message])) as $errors
     | [.[] | select(.reason == "build-finished") | .success] as $finished
     | {complete: (($finished | length) > 0 and ($finished | all) or (($finished | length) > 0 and ($errors | length) == 0 and ($findings | any(.level == "error")))),
-       findings: $findings, errors: $errors}'
+       findings: $findings, errors: $errors,
+       documented: ([.[] | select(.reason == "compiler-artifact" and ((.filenames // []) | any(endswith("/index.html")))) | .package_id] | unique),
+       stopped: ([$messages[] | select(.level == "error" and (.code | counted)) | .package] | unique)}'
 
 # rq_print_findings SUMMARY [LIMIT]: prints the findings in SUMMARY (a file
 # RQ_DIAGNOSTICS_JQ wrote), at most LIMIT (default 50) of them.

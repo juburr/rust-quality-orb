@@ -69,7 +69,8 @@ RQ_ARGS=(nextest run "${RQ_PACKAGE_ARGS[@]}" ${RQ_FEATURE_ARGS[@]+"${RQ_FEATURE_
 if [[ "${LOCKED}" == true ]]; then
     RQ_ARGS+=(--locked)
 fi
-RQ_ARGS+=(--profile "${PROFILE}" --no-fail-fast "--no-tests=${PARAM_NO_TESTS}" --color never)
+RQ_ARGS+=(--profile "${PROFILE}" --no-fail-fast --color never)
+NO_TESTS=${PARAM_NO_TESTS}
 if [[ -n "${RETRIES}" ]]; then
     RQ_ARGS+=(--retries "${RETRIES}")
 fi
@@ -89,8 +90,13 @@ if [[ "${PARTITION}" == true ]]; then
     else
         RQ_ARGS+=(--partition "hash:$((NODE + 1))/${TOTAL}")
         echo "Running the share of node $((NODE + 1)) of ${TOTAL}."
+        # A node's share can be empty when there are few tests.
+        if [[ "${NO_TESTS}" == fail ]]; then
+            NO_TESTS=warn
+        fi
     fi
 fi
+RQ_ARGS+=("--no-tests=${NO_TESTS}")
 RQ_ARGS+=(${RQ_EXTRA_ARGS[@]+"${RQ_EXTRA_ARGS[@]}"})
 # shellcheck disable=SC2034 # read by rq_run_record
 RQ_INPUTS=()
@@ -140,8 +146,17 @@ case "${RC}" in
     101) ERROR="the tests did not build" ;;
     *) ERROR="cargo-nextest failed (exit code ${RC})" ;;
 esac
+# With flaky-result = "fail" (in the profile, or --flaky-result fail), a test
+# that passed on a retry fails the run, and the JUnit report still calls it
+# flaky.
 if [[ "${RC}" -eq 100 && "${FAILED}" -eq 0 ]]; then
-    ERROR="cargo-nextest reported failing tests, but its JUnit report (${NEXTEST_JUNIT}) names none"
+    if [[ "$(jq '[.[] | select(.status == "flaky")] | length' <<< "${TESTS_JSON}")" -gt 0 ]]; then
+        TESTS_JSON=$(jq -c 'map(if .status == "flaky" then .status = "failed" else . end)' <<< "${TESTS_JSON}")
+        FAILED=$(jq '[.[] | select(.status == "failed")] | length' <<< "${TESTS_JSON}")
+        echo "WARN: nextest failed the run on flaky tests (flaky-result is fail), so they count as failing." >&2
+    else
+        ERROR="cargo-nextest reported failing tests, but its JUnit report (${NEXTEST_JUNIT}) names none"
+    fi
 fi
 
 # The doctests, which nextest doesn't run, only on the first node.

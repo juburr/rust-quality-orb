@@ -74,8 +74,8 @@ RC=0
 CARGO_TERM_COLOR=never "${RQ_CARGO}" "${RQ_ARGS[@]}" > "${RQ_BASE}.raw.jsonl" 2> "${RQ_WORK}/err" || RC=$?
 RQ_REPORTS=("${RQ_BASE}.raw.jsonl")
 REPORT="${RQ_BASE}.json"
-if ! jq -s "${RQ_DIAGNOSTICS_JQ}" "${RQ_BASE}.raw.jsonl" > "${REPORT}" 2> "${RQ_WORK}/jq.err"; then
-    echo '{"complete": false, "findings": [], "errors": []}' > "${REPORT}"
+if ! jq -s --argjson docs false "${RQ_DIAGNOSTICS_JQ}" "${RQ_BASE}.raw.jsonl" > "${REPORT}" 2> "${RQ_WORK}/jq.err"; then
+    echo '{"complete": false, "findings": [], "errors": [], "documented": [], "stopped": []}' > "${REPORT}"
 fi
 RQ_REPORTS+=("${REPORT}")
 COMPLETE=$(jq -r '.complete' "${REPORT}")

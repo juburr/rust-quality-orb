@@ -145,8 +145,10 @@ EOF
 } > "${STUBS}/cargo"
 
 # cargo-nextest: STUB_NEXTEST is pass, fail (one test fails, exit 100),
-# flaky (one passes on a retry), build (exit 101), none (no tests, exit 4),
-# or mismatch (exit 100 with every test passing in the JUnit report). It
+# flaky (one passes on a retry), flakyfail (the same, failing the run, as
+# flaky-result = "fail" does: exit 100), build (exit 101), none (no tests,
+# exit 4), or mismatch (exit 100 with every test passing in the JUnit
+# report). It
 # writes the JUnit report where the tool config file the script passes asks.
 {
     echo '#!/usr/bin/env bash'
@@ -183,7 +185,7 @@ esac
             echo '        <testcase name="doubles_wrongly" classname="app::doubling" timestamp="2026-01-01T00:00:00Z" time="0.001">'
             echo '            <failure type="test failure">assertion failed</failure>'
             echo '        </testcase>' ;;
-        flaky)
+        flaky | flakyfail)
             echo '        <testcase name="sometimes" classname="app" timestamp="2026-01-01T00:00:00Z" time="0.001">'
             echo '            <flakyFailure type="test failure">first try failed</flakyFailure>'
             echo '        </testcase>' ;;
@@ -196,7 +198,7 @@ esac
 } > "${junit}"
 echo "     Summary [   0.010s] 3 tests run"
 case "${mode}" in
-    fail | mismatch) exit 100 ;;
+    fail | mismatch | flakyfail) exit 100 ;;
 esac
 exit 0
 EOF
@@ -249,9 +251,11 @@ exit 0
 EOF
 } > "${STUBS}/cargo-llvm-cov"
 
-# cargo-hack: STUB_HACK is pass (three combinations), fail (the second fails),
-# crash (fails before running any), or quiet (fails without the summary). It
-# groups its output for GitHub Actions unless --log-group none is passed.
+# cargo-hack: STUB_HACK is pass (three combinations), fail (the second
+# doesn't compile), notarget (the second can't find the target's standard
+# library), network (the second can't download a crate), crash (fails before
+# running any), or quiet (fails without the summary). It groups its output
+# for GitHub Actions unless --log-group none is passed.
 {
     echo '#!/usr/bin/env bash'
     record
@@ -270,13 +274,21 @@ for combination in "--no-default-features" "--no-default-features --features ext
     if [[ "${group}" == true ]]; then echo "::group::${line}"; else echo "info: ${line}" >&2; fi
     echo "    Checking dirty v0.1.0" >&2
     if [[ "${mode}" != pass && "${i}" -eq 2 ]]; then
-        echo "error[E0425]: cannot find function \`speed\` in this scope" >&2
-        echo "error: could not compile \`dirty\` (lib) due to 1 previous error" >&2
+        case "${mode}" in
+            notarget)
+                echo "error[E0463]: can't find crate for \`core\`" >&2
+                echo "  = note: the \`wasm32-unknown-unknown\` target may not be installed" >&2
+                echo "error: could not compile \`dirty\` (lib) due to 1 previous error" >&2 ;;
+            network) echo "error: failed to download from \`https://static.crates.io/crates/libc/0.2.170/download\`" >&2 ;;
+            *)
+                echo "error[E0425]: cannot find function \`speed\` in this scope" >&2
+                echo "error: could not compile \`dirty\` (lib) due to 1 previous error" >&2 ;;
+        esac
         echo "error: process didn't exit successfully: \`cargo $2 ${combination}\` (exit status: 101)" >&2
     fi
     [[ "${group}" == true ]] && echo "::endgroup::"
 done
-if [[ "${mode}" == fail ]]; then
+if [[ "${mode}" == fail || "${mode}" == notarget || "${mode}" == network ]]; then
     echo >&2
     printf 'error: failed to run 1 commands\n\nfailed commands:\n    dirty:\n        `cargo %s --no-default-features --features extra`\n' "$2" >&2
 fi
@@ -357,8 +369,11 @@ exit 0
 EOF
 } > "${STUBS}/cargo-semver-checks"
 
-# rustup: toolchain install (fails for STUB_RUSTUP_NOINSTALL), run VERSION
-# cargo check (fails for STUB_RUSTUP_FAIL), and show active-toolchain.
+# rustup: toolchain install (fails for STUB_RUSTUP_NOINSTALL), which
+# --toolchain VERSION TOOL, run VERSION cargo check (fails to compile for
+# STUB_RUSTUP_FAIL, with a dependency that needs a newer Rust for
+# STUB_RUSTUP_DEP, and can't download for STUB_RUSTUP_NET; it records the
+# RUSTC it runs with), and show active-toolchain.
 {
     echo '#!/usr/bin/env bash'
     record
@@ -368,8 +383,18 @@ case "$1 $2" in
     "toolchain install")
         if [[ "$3" == "${STUB_RUSTUP_NOINSTALL:-}" ]]; then echo "error: toolchain '$3' is not installable" >&2; exit 1; fi
         echo "info: installing $3"; exit 0 ;;
+    "which --toolchain") echo "/rustup/toolchains/$3/bin/$4"; exit 0 ;;
 esac
 if [[ "$1" == run ]]; then
+    printf 'RUSTC=%s\n' "${RUSTC-unset}" >> "${CALLS}/rustup.$((n + 1))"
+    if [[ "$2" == "${STUB_RUSTUP_DEP:-}" ]]; then
+        echo "error: package \`once_cell v1.21.0\` cannot be built because it requires rustc 1.74 or newer, while the currently active rustc version is $2"
+        exit 101
+    fi
+    if [[ "$2" == "${STUB_RUSTUP_NET:-}" ]]; then
+        echo "error: failed to download from \`https://static.crates.io/crates/once_cell/1.21.0/download\`"
+        exit 101
+    fi
     if [[ "$2" == "${STUB_RUSTUP_FAIL:-}" ]]; then
         echo "error[E0658]: use of unstable library feature \`lazy_cell\`"
         echo "error: could not compile \`dirty\` (lib) due to 1 previous error"
@@ -405,7 +430,7 @@ cat > "${PARAM_INSTALL_PATH}/bin/cargo" << 'CARGO'
 #!/usr/bin/env bash
 n=$(find "${CALLS}" -name "cargo-msrv.*" | wc -l)
 printf '%s\n' "$0" "$@" "RUSTC=${RUSTC}" "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN-unset}" > "${CALLS}/cargo-msrv.$((n + 1))"
-if [[ "$0" == *"/${STUB_MSRV_FAIL:-none}/"* ]]; then echo "error[E0658]: use of unstable library feature"; exit 101; fi
+if [[ "$0" == *"/${STUB_MSRV_FAIL:-none}/"* ]]; then echo "error[E0658]: use of unstable library feature"; echo "error: could not compile \`app\`"; exit 101; fi
 echo "    Finished"
 CARGO
 chmod +x "${PARAM_INSTALL_PATH}/bin/cargo"
@@ -510,20 +535,33 @@ diag() {
     diag error rustdoc::broken_intra_doc_links src/lib.rs
     echo '{"reason": "build-finished", "success": false}'
 } > "${WORK}/denied.jsonl"
-LIB_TEST "jq -c -s \"\${RQ_DIAGNOSTICS_JQ}\" ${WORK}/denied.jsonl"
+LIB_TEST "jq -c -s --argjson docs false \"\${RQ_DIAGNOSTICS_JQ}\" ${WORK}/denied.jsonl"
 check "RQ_DIAGNOSTICS_JQ counts a lint once, however many targets report it" said '"code":"clippy::needless_return","message"'
-check "three findings in all" grep -q '^{"complete":true,"findings":\[{[^]]*},{[^]]*},{[^]]*}\],"errors":\[\]}$' <<< "${OUTPUT}"
 check "and a build that only denied lints stopped as complete" said '"complete":true'
+LIB_TEST "jq -c -s --argjson docs false \"\${RQ_DIAGNOSTICS_JQ}\" ${WORK}/denied.jsonl | jq -c '[(.findings | length), (.errors | length)]'"
+check "three findings in all, and no errors" [ "${OUTPUT}" == "[3,0]" ]
 {
     diag error E0308 src/lib.rs
     diag warning unused_variables src/lib.rs
     diag error "" src/lib.rs
     echo '{"reason": "build-finished", "success": false}'
 } > "${WORK}/broken.jsonl"
-LIB_TEST "jq -c -s \"\${RQ_DIAGNOSTICS_JQ}\" ${WORK}/broken.jsonl | jq -c '[.complete, (.findings | length), (.errors | map(.code))]'"
+LIB_TEST "jq -c -s --argjson docs false \"\${RQ_DIAGNOSTICS_JQ}\" ${WORK}/broken.jsonl | jq -c '[.complete, (.findings | length), (.errors | map(.code))]'"
 check "and one that doesn't compile as incomplete, with E codes and uncoded errors as errors" said '[false,1,[null,"E0308"]]'
-LIB_TEST "jq -c -s \"\${RQ_DIAGNOSTICS_JQ}\" /dev/null"
+LIB_TEST "jq -c -s --argjson docs false \"\${RQ_DIAGNOSTICS_JQ}\" /dev/null"
 check "and no messages at all as incomplete" said '"complete":false'
+{
+    diag warning dead_code src/lib.rs
+    diag warning missing_docs src/lib.rs
+    diag error rustdoc::broken_intra_doc_links src/a.rs
+    diag error clippy::all src/b.rs
+    diag "error: internal compiler error" "" src/c.rs
+    echo '{"reason": "compiler-artifact", "package_id": "b 0.1.0", "filenames": ["/t/doc/b/index.html"]}'
+    echo '{"reason": "build-finished", "success": false}'
+} > "${WORK}/docs.jsonl"
+LIB_TEST "jq -c -s --argjson docs true \"\${RQ_DIAGNOSTICS_JQ}\" ${WORK}/docs.jsonl | jq -c '[(.findings | map(.code)), (.errors | map(.code)), .documented]'"
+check "for docs, it counts only the lints rustdoc reports" said '[["missing_docs","rustdoc::broken_intra_doc_links"],[null,"clippy::all"],["b 0.1.0"]]'
+check "and an internal compiler error, or a denied lint it doesn't count, as an error" said '[null,"clippy::all"]'
 
 begin "fmt"
 new_case
@@ -555,6 +593,12 @@ run fmt dirty packages=nope
 check "refuses a package that isn't a member" said "ERROR: packages names 'nope', which is not a member of the workspace"
 run fmt clean "extra_args=--check"
 check "refuses --check in extra_args" said "ERROR: extra_args can't set --check"
+printf 'newline_style = "Unix"\n' > "${CASE}/fx/clean/rustfmt.toml"
+sed -i 's/$/\r/' "${CASE}/fx/clean/helper/src/lib.rs"
+run fmt clean
+check "reports a file with the wrong line endings by its path" json_is "$(report fmt.json)" '.unformatted | join(",")' helper/src/lib.rs
+rm "${CASE}/fx/clean/rustfmt.toml"
+sed -i 's/\r$//' "${CASE}/fx/clean/helper/src/lib.rs"
 printf 'pub fn broken( {\n' > "${CASE}/fx/clean/helper/src/lib.rs"
 run fmt clean report_only=true run_record=true
 check "fails on a file rustfmt can't parse, even with report_only" failed
@@ -602,6 +646,14 @@ check "counts a lint RUSTDOCFLAGS denies as a finding" said "ERROR: rustdoc foun
 check "noting that it stopped rustdoc" said "A denied lint stopped rustdoc"
 run docs dirty "extra_args=--open"
 check "refuses --open" said "ERROR: extra_args can't set --open"
+printf 'fn never_called() {}\n' >> "${CASE}/fx/clean/helper/src/lib.rs"
+run docs clean
+check "leaves the type-check's compiler warnings to lint" succeeded
+printf 'fn main() { panic!("the build script fails"); }\n' > "${CASE}/fx/clean/helper/build.rs"
+run docs clean report_only=true
+check "fails when a build script fails, even with report_only" said "ERROR: The documentation could not be built"
+check "naming what wasn't documented" said "Not documented, and not stopped by a documentation lint:"
+rm "${CASE}/fx/clean/helper/build.rs"
 printf 'pub fn broken() -> u32 { "text" }\n' > "${CASE}/fx/clean/helper/src/lib.rs"
 run docs clean report_only=true
 check "fails on code that doesn't compile, even with report_only" failed
@@ -629,6 +681,9 @@ check "fails when the doctests don't build" said "ERROR: The tests could not run
 run test clean STUB_NEXTEST=flaky STUB_DOCTEST=pass
 check "passes with a flaky test" succeeded
 check "warning about it" said "WARN: 1 test was flaky"
+run test clean STUB_NEXTEST=flakyfail STUB_DOCTEST=pass
+check "counts flaky tests as failing when nextest fails the run on them" said "app sometimes"
+check "as a failure, not a mismatch" not_said "names none"
 run test clean STUB_NEXTEST=build STUB_DOCTEST=pass run_record=true
 check "fails when the tests don't build" said "ERROR: The tests could not run: the tests did not build."
 check "recorded as an error" json_is "$(report nextest.run-record.json)" .outcome error
@@ -641,6 +696,7 @@ run test clean STUB_DOCTEST=pass doctests=false
 check "skips the doctests when doctests is false" call_count cargo-doc 0
 run test clean STUB_DOCTEST=pass partition=true CIRCLE_NODE_TOTAL=3 CIRCLE_NODE_INDEX=1
 check "runs its share with partition" called_with cargo-nextest --partition hash:2/3
+check "where an empty share only warns" called_with cargo-nextest "--no-tests=warn"
 check "and the doctests only on the first node" call_count cargo-doc 0
 run test clean STUB_DOCTEST=pass partition=true CIRCLE_NODE_TOTAL=3 CIRCLE_NODE_INDEX=0
 check "where it runs them" call_count cargo-doc 1
@@ -673,6 +729,11 @@ run coverage clean coverage_min=100 STUB_COV_LINES="2000 1999"
 check "compares exactly: 1999 of 2000 lines is below 100" said "99.95% of lines are covered (1999 lines of 2000), below coverage_min (100%)."
 run coverage clean nextest=true
 check "runs the tests with nextest when nextest is true" called_with cargo-llvm-cov llvm-cov nextest --no-report
+run coverage clean STUB_COV_LINES="0 0" "ignore_filename_regex=src/" report_only=true
+check "fails when it measured no lines, even with report_only" said "ERROR: cargo-llvm-cov measured no lines (ignore_filename_regex may match every file)"
+run coverage clean "extra_args=--release --target x86_64-unknown-linux-gnu --no-cfg-coverage"
+check "gives report the options that say where the run's objects are" called_with cargo-llvm-cov llvm-cov report --json --release --target x86_64-unknown-linux-gnu
+check "but not the others" not_called_with cargo-llvm-cov report --no-cfg-coverage
 run coverage clean STUB_COV=fail report_only=true
 check "fails when the tests fail, even with report_only" said "ERROR: the tests failed or did not build"
 run coverage clean STUB_COV=nollvm
@@ -692,6 +753,7 @@ run msrv clean toolchain_source=rustup run_record=true
 check "passes when every package builds on its rust-version" succeeded
 check "installing that toolchain with rustup" called_with rustup toolchain install 1.70 --profile minimal --no-self-update
 check "and checking every package that declares it, in one run" called_with rustup run 1.70 cargo check -p app -p helper
+check "with that toolchain's rustc, whatever rustc comes first on the PATH" called_with rustup run 1.70 "RUSTC=/rustup/toolchains/1.70/bin/rustc"
 check "recording the version" json_is "$(report msrv.run-record.json)" '.results[0] | [.version, .source, .status] | join(" ")' "1.70 rustup passed"
 run msrv dirty toolchain_source=rustup STUB_RUSTUP_FAIL=1.70 run_record=true
 check "fails when a package doesn't build on its rust-version" failed
@@ -700,6 +762,14 @@ check "with the compiler's output" said "use of unstable library feature"
 check "recorded as findings" json_is "$(report msrv.run-record.json)" .outcome findings
 run msrv dirty toolchain_source=rustup STUB_RUSTUP_FAIL=1.70 report_only=true
 check "passes with report_only" succeeded
+run msrv clean toolchain_source=rustup STUB_RUSTUP_DEP=1.70
+check "counts a dependency that needs a newer Rust as a finding" said "fails on 1.70."
+run msrv clean toolchain_source=rustup STUB_RUSTUP_NET=1.70 report_only=true
+check "fails when cargo can't fetch the dependencies, even with report_only" said "ERROR: cargo check could not run with Rust 1.70"
+run msrv clean toolchain_source=rustup rust_version=1.75
+run msrv clean toolchain_source=rustup
+check "removes the logs an earlier run left for other versions" absent "$(report msrv-1.75.log)"
+check "and keeps this run's" exists "$(report msrv-1.70.log)"
 run msrv clean toolchain_source=rustup STUB_RUSTUP_NOINSTALL=1.70 report_only=true
 check "fails when the toolchain can't be installed, even with report_only" said "ERROR: rustup could not install the 1.70 toolchain"
 run msrv clean toolchain_source=rustup rust_version=1.75 packages=helper
@@ -769,6 +839,15 @@ run features dirty STUB_HACK=fail report_only=true
 check "passes with report_only" succeeded
 run features dirty STUB_HACK=fail GITHUB_ACTIONS=true
 check "reads plain progress lines on GitHub Actions too" said "dirty: cargo check --no-default-features --features extra"
+run features dirty STUB_HACK=notarget report_only=true
+check "fails when a target's standard library is missing, even with report_only" said "ERROR: cargo-hack could not check cargo check --no-default-features --features extra"
+check "saying why" said "can't find crate for"
+run features dirty STUB_HACK=network report_only=true
+check "and when a crate can't be downloaded" said "failed to download from"
+run features dirty targets=wasm32-unknown-unknown
+check "lists its logs in the report" json_is "$(report features.json)" '.logs | length' 2
+run features dirty
+check "removes the logs an earlier run left for other targets" absent "$(report features-wasm32-unknown-unknown.log)"
 run features dirty STUB_HACK=crash report_only=true
 check "fails when cargo-hack fails before running, even with report_only" said "ERROR: cargo-hack failed before it could run every combination"
 run features dirty STUB_HACK=quiet report_only=true

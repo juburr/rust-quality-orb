@@ -53,7 +53,9 @@ inputs:
     default: "false"
   no_tests:
     description: >
-      What to do when no test runs (--no-tests): fail, warn or pass.
+      What to do when no test runs (--no-tests): fail, warn or pass. When
+      partition splits the run, fail becomes warn, since a node's share can be
+      empty.
     default: fail
   output_dir:
     description: >

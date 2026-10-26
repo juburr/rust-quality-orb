@@ -4,9 +4,10 @@ description: >
   combination of them, using cargo-hack (cargo hack check --each-feature or
   --feature-powerset), for the machine's target and any in targets. Needs
   cargo-hack (install with tools: cargo-hack). A combination that doesn't
-  build is a finding; cargo-hack failing before it runs cargo fails the step
-  whatever report_only says. The GitHub Actions twin of the orb's features
-  command.
+  build is a finding; cargo-hack failing, or a combination failing for a
+  reason other than the code (a target whose standard library isn't installed,
+  a download), fails the step whatever report_only says. The GitHub Actions
+  twin of the orb's features command.
 author: juburr
 
 inputs:
