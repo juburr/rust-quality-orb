@@ -74,7 +74,9 @@ parameters:
     description: >
       More cargo hack arguments, split like shell words. Nothing in them is
       expanded or run; environment variables are expanded before splitting.
-      --keep-going, --log-group and --print-command-list are refused.
+      --each-feature and --feature-powerset (mode sets them), and
+      --keep-going, --log-group, --color and --print-command-list, which
+      change the report, are refused.
   output_dir:
     type: string
     default: /tmp/rust-quality-reports

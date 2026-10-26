@@ -1,0 +1,157 @@
+name: Run Rust tests with nextest
+description: >
+  Runs the tests with cargo-nextest, which runs each test in its own process,
+  writes JUnit, retries flaky tests and splits a run across parallel jobs, and
+  then the doctests, which nextest doesn't run, with cargo test --doc. Needs
+  cargo-nextest (install with tools: cargo-nextest). Tests that fail, and code
+  that doesn't build, fail the step. The GitHub Actions twin of the orb's test
+  command.
+author: juburr
+
+inputs:
+  all_features:
+    description: >
+      Enable every feature (--all-features).
+    default: "false"
+  doctests:
+    description: >
+      Run the doctests too, with cargo test --doc, on the first node only when
+      partition splits the run.
+    default: "true"
+  extra_args:
+    description: >
+      More cargo nextest run arguments, split like shell words. Nothing in
+      them is expanded or run. Options the parameters set (--profile,
+      --partition, --no-tests, --retries, -E, --no-fail-fast) and those that
+      change the reports (--message-format, --tool-config-file, --color) are
+      refused.
+    default: ""
+  features:
+    description: >
+      Features to enable, separated by commas or spaces, as cargo's --features
+      takes them (package/feature for a dependency's).
+    default: ""
+  filter:
+    description: >
+      A nextest filterset choosing the tests to run (-E), such as 'not
+      test(slow)'. Empty runs every test.
+    default: ""
+  junit:
+    description: >
+      Also write JUnit XML, nextest's own (junit/<report_name>/nextest.xml)
+      and the doctests' (doctests.xml), for a JUnit reader such as a test
+      report action.
+    default: "true"
+  locked:
+    description: >
+      Pass --locked, so cargo fails instead of changing a Cargo.lock that
+      doesn't match Cargo.toml. Needs a committed Cargo.lock.
+    default: "false"
+  no_default_features:
+    description: >
+      Leave the default features off (--no-default-features).
+    default: "false"
+  no_tests:
+    description: >
+      What to do when no test runs (--no-tests): fail, warn or pass.
+    default: fail
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to the
+      artifact upload.
+    default: /tmp/rust-quality-reports
+  packages:
+    description: >
+      Workspace members to test, by package name, separated by commas or
+      spaces. Empty (the default) means every member.
+    default: ""
+  partition:
+    description: >
+      Split the tests across the job's parallel nodes (from CIRCLE_NODE_TOTAL
+      and CIRCLE_NODE_INDEX, which a job's env can set from its matrix), each
+      running a share (--partition hash:<node>/<total>).
+    default: "false"
+  profile:
+    description: >
+      The nextest profile to run with (--profile), from .config/nextest.toml,
+      such as ci.
+    default: default
+  report_name:
+    description: >
+      The reports' file name, without extension: <report_name>.json (the
+      counts and failing tests), <report_name>.log (nextest's output),
+      <report_name>.doctests.log, <report_name>.run-record.json, and
+      junit/<report_name>/, which holds nextest.xml and doctests.xml. Give
+      each run of this command in a job its own.
+    default: nextest
+  retries:
+    description: >
+      How many times to retry a failing test (--retries), counting a test that
+      passes on a retry as flaky. Empty keeps the profile's setting.
+    default: ""
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which Cargo.toml and Cargo.lock, with which toolchain and settings, and
+      how many tests passed, failed, were flaky or skipped.
+    default: "false"
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact, named
+      rust-quality-reports-<report_name> and a random suffix, including when
+      the step fails.
+    default: "true"
+  working_dir:
+    description: >
+      Directory to run in: the root of the Cargo workspace or package, or any
+      directory in it.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=rust-quality-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: cargo nextest
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_ALL_FEATURES: ${{ inputs.all_features }}
+        PARAM_DOCTESTS: ${{ inputs.doctests }}
+        PARAM_EXTRA_ARGS: ${{ inputs.extra_args }}
+        PARAM_FEATURES: ${{ inputs.features }}
+        PARAM_FILTER: ${{ inputs.filter }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_LOCKED: ${{ inputs.locked }}
+        PARAM_NO_DEFAULT_FEATURES: ${{ inputs.no_default_features }}
+        PARAM_NO_TESTS: ${{ inputs.no_tests }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_PACKAGES: ${{ inputs.packages }}
+        PARAM_PARTITION: ${{ inputs.partition }}
+        PARAM_PROFILE: ${{ inputs.profile }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_RETRIES: ${{ inputs.retries }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/test.sh"
+        "SCRIPT_RUST_QUALITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/rust_quality.sh"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

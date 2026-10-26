@@ -1,0 +1,148 @@
+name: Check Rust feature combinations
+description: >
+  Checks that each package builds with every feature on its own, or with every
+  combination of them, using cargo-hack (cargo hack check --each-feature or
+  --feature-powerset), for the machine's target and any in targets. Needs
+  cargo-hack (install with tools: cargo-hack). A combination that doesn't
+  build is a finding; cargo-hack failing before it runs cargo fails the step
+  whatever report_only says. The GitHub Actions twin of the orb's features
+  command.
+author: juburr
+
+inputs:
+  depth:
+    description: >
+      With feature_powerset, the largest number of features combined
+      (--depth). Empty combines all of them, which grows exponentially.
+    default: "2"
+  extra_args:
+    description: >
+      More cargo hack arguments, split like shell words. Nothing in them is
+      expanded or run. --each-feature and --feature-powerset (mode sets them),
+      and --keep-going, --log-group, --color and --print-command-list, which
+      change the report, are refused.
+    default: ""
+  junit:
+    description: >
+      Also write JUnit XML, one test case per combination, for a JUnit reader
+      such as a test report action.
+    default: "true"
+  locked:
+    description: >
+      Pass --locked, so cargo fails instead of changing a Cargo.lock that
+      doesn't match Cargo.toml. Needs a committed Cargo.lock.
+    default: "false"
+  mode:
+    description: >
+      each_feature builds each feature on its own (and with none and all),
+      --each-feature; feature_powerset builds every combination of them up to
+      depth, --feature-powerset.
+    default: each_feature
+  no_dev_deps:
+    description: >
+      Leave dev-dependencies out (--no-dev-deps), so their features don't hide
+      a combination that only builds with them. cargo-hack removes them from
+      Cargo.toml while it runs and restores the file after. Only with
+      subcommand check or build.
+    default: "true"
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to the
+      artifact upload.
+    default: /tmp/rust-quality-reports
+  packages:
+    description: >
+      Workspace members to check, by package name, separated by commas or
+      spaces. Empty (the default) means every member.
+    default: ""
+  report_name:
+    description: >
+      The reports' file name, without extension: <report_name>.json (each
+      combination and its result) and <report_name>.log (cargo-hack's output),
+      <report_name>.run-record.json and junit/<report_name>.xml. Give each run
+      of this command in a job its own.
+    default: features
+  report_only:
+    description: >
+      Report findings without failing the step, to adopt the check gradually.
+      cargo-hack failing before it runs cargo still fails it.
+    default: "false"
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which Cargo.toml and Cargo.lock, with which toolchain and settings, and
+      which combinations failed.
+    default: "false"
+  skip_features:
+    description: >
+      Features never to enable, separated by commas or spaces (--skip).
+    default: ""
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact, named
+      rust-quality-reports-<report_name> and a random suffix, including when
+      the step fails.
+    default: "true"
+  subcommand:
+    description: >
+      The cargo command to run for each combination: check, clippy, build or
+      test.
+    default: check
+  targets:
+    description: >
+      Targets to check besides the machine's own, separated by commas or
+      spaces, such as wasm32-unknown-unknown. Each needs its standard library
+      installed (install_rust or install_rustup targets).
+    default: ""
+  working_dir:
+    description: >
+      Directory to run in: the root of the Cargo workspace or package, or any
+      directory in it.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=rust-quality-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: cargo hack
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_DEPTH: ${{ inputs.depth }}
+        PARAM_EXTRA_ARGS: ${{ inputs.extra_args }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_LOCKED: ${{ inputs.locked }}
+        PARAM_MODE: ${{ inputs.mode }}
+        PARAM_NO_DEV_DEPS: ${{ inputs.no_dev_deps }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_PACKAGES: ${{ inputs.packages }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_ONLY: ${{ inputs.report_only }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+        PARAM_SKIP_FEATURES: ${{ inputs.skip_features }}
+        PARAM_SUBCOMMAND: ${{ inputs.subcommand }}
+        PARAM_TARGETS: ${{ inputs.targets }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/features.sh"
+        "SCRIPT_RUST_QUALITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/rust_quality.sh"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

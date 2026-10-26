@@ -1,0 +1,198 @@
+name: Check the minimum supported Rust version
+description: >
+  Checks that each package builds (cargo check) with the Rust version its
+  Cargo.toml declares as rust-version, its minimum supported Rust version, or
+  with rust_version. The toolchain for it comes from rustup when rustup is on
+  the PATH, or else is installed like install_rust does, verified against this
+  orb's checksum table, into a directory of its own, so the job's toolchain
+  stays first on the PATH. A build that fails on that version is a finding; a
+  toolchain that can't be installed fails the step whatever report_only says.
+  The GitHub Actions twin of the orb's msrv command.
+author: juburr
+
+inputs:
+  all_features:
+    description: >
+      Enable every feature (--all-features).
+    default: "false"
+  all_targets:
+    description: >
+      Check tests, examples and benchmarks too (--all-targets). Off by
+      default: their dev-dependencies often need a newer Rust than the crate
+      itself.
+    default: "false"
+  caching:
+    description: >
+      With toolchain_source rust, cache the verified toolchain downloads
+      between jobs, keyed by the versions the packages declare.
+    default: "true"
+  download_base_url:
+    description: >
+      With toolchain_source rust, a mirror of https://static.rust-lang.org to
+      download from, as install_rust's download_base_url. With rustup, set
+      RUSTUP_DIST_SERVER instead.
+    default: ""
+  extra_args:
+    description: >
+      More cargo check arguments, split like shell words. Nothing in them is
+      expanded or run. --message-format is refused.
+    default: ""
+  features:
+    description: >
+      Features to enable, separated by commas or spaces, as cargo's --features
+      takes them (package/feature for a dependency's).
+    default: ""
+  junit:
+    description: >
+      Also write JUnit XML, one test case per Rust version, for a JUnit reader
+      such as a test report action.
+    default: "true"
+  locked:
+    description: >
+      Pass --locked, so cargo fails instead of changing a Cargo.lock that
+      doesn't match Cargo.toml. Needs a committed Cargo.lock.
+    default: "false"
+  no_default_features:
+    description: >
+      Leave the default features off (--no-default-features).
+    default: "false"
+  output_dir:
+    description: >
+      Absolute path of the directory to write the reports into. Environment
+      variables are not expanded, since the path is also passed to the
+      artifact upload.
+    default: /tmp/rust-quality-reports
+  packages:
+    description: >
+      Workspace members to check, by package name, separated by commas or
+      spaces. Empty (the default) means every member.
+    default: ""
+  report_name:
+    description: >
+      The reports' file name, without extension: <report_name>.json (each
+      version and its packages) and <report_name>-<version>.log (cargo's
+      output), <report_name>.run-record.json and junit/<report_name>.xml. Give
+      each run of this command in a job its own.
+    default: msrv
+  report_only:
+    description: >
+      Report findings without failing the step, to adopt the check gradually.
+      A toolchain that can't be installed still fails it.
+    default: "false"
+  run_record:
+    description: >
+      Also write a run record (<report_name>.run-record.json): what ran, on
+      which Cargo.toml and Cargo.lock, with which toolchain and settings, and
+      which versions it checked.
+    default: "false"
+  rust_version:
+    description: >
+      The Rust version to check every selected package with, such as 1.70 or
+      1.70.0. Empty (the default) checks each package with its own
+      rust-version, and skips packages that declare none.
+    default: ""
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact, named
+      rust-quality-reports-<report_name> and a random suffix, including when
+      the step fails.
+    default: "true"
+  toolchain_source:
+    description: >
+      Where the toolchain comes from: rustup (rustup toolchain install), rust
+      (a pinned release, as install_rust installs it, from 1.56.0 on), or
+      auto, which is rustup when rustup is on the PATH and rust otherwise.
+    default: auto
+  verify_checksums:
+    description: >
+      With toolchain_source rust, SHA-512 verification of the release's
+      manifest against this orb's checksum table, as install_rust does it.
+    default: strict
+  working_dir:
+    description: >
+      Directory to run in: the root of the Cargo workspace or package, or any
+      directory in it.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=rust-quality-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    # The key is computed from files that name the CPU (uname -m), HOME (a
+    # cache is restored to the absolute path it was saved from) and what
+    # is installed, as the orb's command computes it.
+    - name: Prepare minimum supported Rust version cache key
+      id: cache-key
+      if: (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/rust-quality-orb-msrv-cache-key
+        PARAM_PACKAGES: ${{ inputs.packages }}
+        PARAM_RUST_VERSION: ${{ inputs.rust_version }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/msrv_cache_key.sh"
+        # Bump the version in the key when an existing checksum table entry
+        # changes, so caches saved for the old bytes stop being restored.
+        printf 'key=rust-quality-orb-msrv-v1-%s\n' "$(sha256sum < "${RUNNER_TEMP}/rust-quality-orb-msrv-cache-key" | cut -c1-64)" >> "${GITHUB_OUTPUT}"
+    - name: Restore Rust toolchains cache
+      id: restore
+      if: (inputs.caching == 'true' || inputs.caching == '1')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-rust
+        key: ${{ steps.cache-key.outputs.key }}
+    - name: Minimum supported Rust version
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_ALL_FEATURES: ${{ inputs.all_features }}
+        PARAM_ALL_TARGETS: ${{ inputs.all_targets }}
+        PARAM_CACHING: ${{ inputs.caching }}
+        PARAM_DOWNLOAD_BASE_URL: ${{ inputs.download_base_url }}
+        PARAM_EXTRA_ARGS: ${{ inputs.extra_args }}
+        PARAM_FEATURES: ${{ inputs.features }}
+        PARAM_JUNIT: ${{ inputs.junit }}
+        PARAM_LOCKED: ${{ inputs.locked }}
+        PARAM_NO_DEFAULT_FEATURES: ${{ inputs.no_default_features }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_PACKAGES: ${{ inputs.packages }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_ONLY: ${{ inputs.report_only }}
+        PARAM_RUN_RECORD: ${{ inputs.run_record }}
+        PARAM_RUST_VERSION: ${{ inputs.rust_version }}
+        PARAM_TOOLCHAIN_SOURCE: ${{ inputs.toolchain_source }}
+        PARAM_VERIFY_CHECKSUMS: ${{ inputs.verify_checksums }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/msrv.sh"
+        "SCRIPT_RUST_QUALITY_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/rust_quality.sh"
+        "SCRIPT_RUST_INSTALL=${GITHUB_ACTION_PATH}/../../src/install/rust/install.sh"
+    # A saved cache can't be replaced, so it is only saved when none was
+    # restored. Like the orb's save_cache, it is saved right after the
+    # step, not at the end of the job.
+    - name: Save Rust toolchains cache
+      if: (inputs.caching == 'true' || inputs.caching == '1') && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/rust-quality-orb-rust
+        key: ${{ steps.cache-key.outputs.key }}
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

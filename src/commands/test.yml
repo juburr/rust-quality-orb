@@ -70,8 +70,9 @@ parameters:
     type: boolean
     default: false
     description: >
-      Split the tests across the job's parallel nodes (CircleCI's
-      parallelism), each running a share (--partition hash:<node>/<total>).
+      Split the tests across the job's parallel nodes (CircleCI's parallelism,
+      from CIRCLE_NODE_TOTAL and CIRCLE_NODE_INDEX), each running a share
+      (--partition hash:<node>/<total>).
   locked:
     type: boolean
     default: false
@@ -84,8 +85,9 @@ parameters:
     description: >
       More cargo nextest run arguments, split like shell words. Nothing in
       them is expanded or run; environment variables are expanded before
-      splitting. Options that change the reports (--message-format,
-      --tool-config-file) are refused.
+      splitting. Options the parameters set (--profile, --partition,
+      --no-tests, --retries, -E, --no-fail-fast) and those that change the
+      reports (--message-format, --tool-config-file, --color) are refused.
   output_dir:
     type: string
     default: /tmp/rust-quality-reports

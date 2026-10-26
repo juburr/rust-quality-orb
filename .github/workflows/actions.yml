@@ -1,0 +1,342 @@
+# Tests the GitHub Actions in actions/ on GitHub's own runners, as
+# .circleci/test-deploy.yml tests the orb's commands on CircleCI. Each job
+# runs the actions from this checkout (uses: ./actions/...), so a pull
+# request tests its own changes.
+name: GitHub Actions
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run the actions tests
+        run: bash tests/actions_test.sh
+
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # e_machine field of the ELF header: 3e00 is x86-64, b700 is aarch64.
+          # Quoted, since YAML reads an unquoted 3e00 as the number 3.
+          - runner: ubuntu-24.04
+            arch: amd64
+            elf: "3e00"
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            elf: "b700"
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+        with:
+          tools: rust cargo-nextest cargo-llvm-cov cargo-hack cargo-semver-checks cargo-shear
+          components: clippy,rustfmt,llvm-tools
+      - name: Verify the install
+        env:
+          ARCH: ${{ matrix.arch }}
+          ELF: ${{ matrix.elf }}
+        run: |
+          default() { awk -v name="  ${1//-/_}_version:" '$0 == name { p = 1 } p && /^    default:/ { gsub(/"/, "", $2); print $2; exit }' src/commands/install.yml; }
+          # The pinned Rust comes first on the PATH, ahead of the runner's rustup.
+          [[ "$(command -v cargo)" == "${HOME}/.rust-quality-orb/rust/bin/cargo" ]]
+          cargo --version | grep -q "^cargo $(default rust) "
+          rustc --version | grep -q "^rustc $(default rust) "
+          cargo clippy --version
+          cargo fmt --version
+          ls "${HOME}"/.rust-quality-orb/rust/lib/rustlib/*/bin/llvm-cov
+          od -An -tx1 -j18 -N2 "$(command -v cargo)" | tr -d ' \n' | grep -Fx "${ELF}"
+          for tool in cargo-nextest cargo-llvm-cov cargo-hack cargo-semver-checks cargo-shear; do
+            binary=$(command -v "${tool}")
+            [[ "${binary}" == "${HOME}/.rust-quality-orb/bin/${tool}" ]]
+            od -An -tx1 -j18 -N2 "${binary}" | tr -d ' \n' | grep -Fx "${ELF}"
+            entry=$(grep -F "[\"$(default "${tool}")/${ARCH}\"]=" "src/install/${tool}/install.sh" | tail -n 1 | cut -d'"' -f4)
+            [[ "$(sha512sum "${binary}" | awk '{ print $1 }')" == "${entry}" ]] || { echo "${tool} is not the pinned binary."; exit 1; }
+          done
+      # The first install saved each tool to the cache, so this one restores
+      # it. It goes to a directory of its own, which later steps find first
+      # on the PATH.
+      - uses: ./actions/install_cargo_shear
+        with:
+          install_path: ${{ runner.temp }}/second
+      - name: Verify the second install comes first on the PATH
+        env:
+          SECOND: ${{ runner.temp }}/second
+        run: |
+          [[ "$(command -v cargo-shear)" == "${SECOND}/cargo-shear" ]]
+          cargo shear --version
+      - name: Install an unlisted version, which must fail
+        id: unlisted
+        continue-on-error: true
+        uses: ./actions/install_cargo_hack
+        with:
+          version: 0.6.37
+          caching: false
+          install_path: ${{ runner.temp }}/unlisted
+      - name: Verify it failed before installing anything
+        env:
+          OUTCOME: ${{ steps.unlisted.outcome }}
+          UNLISTED: ${{ runner.temp }}/unlisted
+        run: |
+          [[ "${OUTCOME}" == failure ]]
+          [[ ! -e "${UNLISTED}/cargo-hack" ]]
+
+  # A fresh runner with every download host blocked installs from the cache
+  # the install job saved, which only works if the cache is used, for Rust's
+  # manifest and components as well as the tools.
+  install-from-cache:
+    needs: install
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Block the download hosts
+        run: |
+          hosts="github.com objects.githubusercontent.com release-assets.githubusercontent.com static.rust-lang.org"
+          echo "127.0.0.1 ${hosts}" | sudo tee -a /etc/hosts
+          for host in github.com static.rust-lang.org; do
+            if curl -sSf --max-time 10 -o /dev/null "https://${host}"; then
+              echo "${host} is still reachable."
+              exit 1
+            fi
+          done
+      - uses: ./actions/install
+        with:
+          tools: rust cargo-nextest cargo-llvm-cov cargo-hack cargo-semver-checks cargo-shear
+          components: clippy,rustfmt,llvm-tools
+      - name: Verify the install
+        run: |
+          [[ "$(command -v cargo)" == "${HOME}/.rust-quality-orb/rust/bin/cargo" ]]
+          cargo --version
+          cargo clippy --version
+          for tool in nextest llvm-cov hack semver-checks shear; do
+            cargo "${tool}" --version
+          done
+
+  # install_rustup installs rustup itself, then the toolchain the
+  # rust-toolchain.toml in the directory it runs in names.
+  rustup:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pin a toolchain
+        run: printf '[toolchain]\nchannel = "1.85.0"\ncomponents = ["clippy"]\nprofile = "minimal"\n' > rust-toolchain.toml
+      - uses: ./actions/install_rustup
+      - name: Verify rustup and the toolchain
+        run: |
+          default=$(awk '/^  version:/ { p = 1 } p && /^    default:/ { gsub(/"/, "", $2); print $2; exit }' src/commands/install_rustup.yml)
+          rustup --version 2> /dev/null | grep -q "^rustup ${default} "
+          rustup show active-toolchain | grep -q '^1.85.0-'
+          cargo --version | grep -q '^cargo 1.85.0 '
+          cargo clippy --version
+
+  # Every check passes on the clean fixture, on both architectures.
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+        with:
+          tools: rust cargo-nextest cargo-llvm-cov cargo-hack cargo-semver-checks cargo-shear
+          components: clippy,rustfmt,llvm-tools
+      - uses: ./actions/fmt
+        with:
+          working_dir: tests/fixtures/clean
+          run_record: "true"
+          output_dir: ${{ runner.temp }}/reports
+      - uses: ./actions/lint
+        with:
+          working_dir: tests/fixtures/clean
+          locked: "true"
+          output_dir: ${{ runner.temp }}/reports
+      - uses: ./actions/docs
+        with:
+          working_dir: tests/fixtures/clean
+          output_dir: ${{ runner.temp }}/reports
+      - uses: ./actions/test
+        with:
+          working_dir: tests/fixtures/clean
+          run_record: "true"
+          output_dir: ${{ runner.temp }}/reports
+      - uses: ./actions/coverage
+        with:
+          working_dir: tests/fixtures/clean
+          coverage_min: "50"
+          formats: lcov
+          output_dir: ${{ runner.temp }}/reports
+      - uses: ./actions/features
+        with:
+          working_dir: tests/fixtures/clean
+          output_dir: ${{ runner.temp }}/reports
+      - uses: ./actions/unused_deps
+        with:
+          working_dir: tests/fixtures/clean
+          output_dir: ${{ runner.temp }}/reports
+      - uses: ./actions/msrv
+        with:
+          working_dir: tests/fixtures/clean
+          toolchain_source: rust
+          output_dir: ${{ runner.temp }}/reports
+      - uses: ./actions/semver_checks
+        with:
+          working_dir: tests/fixtures/semver/current
+          baseline_root: ${{ github.workspace }}/tests/fixtures/semver/baseline
+          release_type: major
+          output_dir: ${{ runner.temp }}/reports
+      - name: Verify the reports
+        env:
+          REPORTS: ${{ runner.temp }}/reports
+        run: |
+          cd "${REPORTS}"
+          jq -e '.unformatted == []' fmt.json
+          jq -e '.ci.provider == "github-actions" and (.ci.build_url | test("/actions/runs/"))' fmt.run-record.json
+          jq -e '.complete and .findings == []' clippy.json docs.json
+          jq -e '.nextest.failed == 0 and .nextest.passed >= 2 and .doctests.passed == 1' nextest.json
+          jq -e '.data[0].totals.lines.covered > 0' coverage.json
+          jq -e '[.combinations[] | select(.status == "failed")] == [] and (.combinations | length) > 1' features.json
+          jq -e '.findings == []' unused-deps.json
+          jq -e '[.versions[] | [.version, .source, .status]] == [["1.70", "rust", "passed"]]' msrv.json
+          jq -e '.lints == [] and .packages[0].name == "shapes"' semver-checks.json
+          [[ -z "$(git status --porcelain)" ]] || { git status; echo "A check changed the checkout."; exit 1; }
+
+  # Each check finds what is wrong with the dirty and semver fixtures: by
+  # default the step fails, and with report_only it passes.
+  findings:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+        with:
+          tools: rust cargo-nextest cargo-llvm-cov cargo-hack cargo-semver-checks cargo-shear
+          components: clippy,rustfmt,llvm-tools
+      - name: fmt, which must fail
+        id: fmt
+        continue-on-error: true
+        uses: ./actions/fmt
+        with:
+          working_dir: tests/fixtures/dirty
+          output_dir: ${{ runner.temp }}/reports
+      - name: lint, which must fail
+        id: lint
+        continue-on-error: true
+        uses: ./actions/lint
+        with:
+          working_dir: tests/fixtures/dirty
+          output_dir: ${{ runner.temp }}/reports
+      - name: docs, which must fail
+        id: docs
+        continue-on-error: true
+        uses: ./actions/docs
+        with:
+          working_dir: tests/fixtures/dirty
+          output_dir: ${{ runner.temp }}/reports
+      - name: test, which must fail
+        id: test
+        continue-on-error: true
+        uses: ./actions/test
+        with:
+          working_dir: tests/fixtures/dirty
+          output_dir: ${{ runner.temp }}/reports
+      - name: coverage, which must fail
+        id: coverage
+        continue-on-error: true
+        uses: ./actions/coverage
+        with:
+          working_dir: tests/fixtures/clean
+          coverage_min: "100"
+          output_dir: ${{ runner.temp }}/reports
+      - name: features, which must fail
+        id: features
+        continue-on-error: true
+        uses: ./actions/features
+        with:
+          working_dir: tests/fixtures/dirty
+          output_dir: ${{ runner.temp }}/reports
+      - name: unused_deps, which must fail
+        id: unused-deps
+        continue-on-error: true
+        uses: ./actions/unused_deps
+        with:
+          working_dir: tests/fixtures/dirty
+          output_dir: ${{ runner.temp }}/reports
+      - name: msrv, which must fail
+        id: msrv
+        continue-on-error: true
+        uses: ./actions/msrv
+        with:
+          working_dir: tests/fixtures/dirty
+          toolchain_source: rust
+          output_dir: ${{ runner.temp }}/reports
+      - name: semver_checks, which must fail
+        id: semver-checks
+        continue-on-error: true
+        uses: ./actions/semver_checks
+        with:
+          working_dir: tests/fixtures/semver/current
+          baseline_root: ${{ github.workspace }}/tests/fixtures/semver/baseline
+          output_dir: ${{ runner.temp }}/reports
+      - name: Verify each failed, and reported what it found
+        env:
+          OUTCOMES: >-
+            ${{ steps.fmt.outcome }} ${{ steps.lint.outcome }} ${{ steps.docs.outcome }} ${{ steps.test.outcome }}
+            ${{ steps.coverage.outcome }} ${{ steps.features.outcome }} ${{ steps.unused-deps.outcome }}
+            ${{ steps.msrv.outcome }} ${{ steps.semver-checks.outcome }}
+          REPORTS: ${{ runner.temp }}/reports
+        run: |
+          [[ "${OUTCOMES}" == "failure failure failure failure failure failure failure failure failure" ]]
+          cd "${REPORTS}"
+          jq -e '.unformatted == ["src/format.rs"]' fmt.json
+          jq -e '.complete and any(.findings[]; .code == "clippy::needless_return")' clippy.json
+          jq -e '.complete and any(.findings[]; .code == "rustdoc::broken_intra_doc_links")' docs.json
+          jq -e '.nextest.failures == ["dirty::doubling doubles_wrongly"] or (.nextest.failures | length) == 1' nextest.json
+          jq -e '.data[0].totals.lines.covered < .data[0].totals.lines.count' coverage.json
+          jq -e '[.combinations[] | select(.status == "failed") | .command] | any(test("extra"))' features.json
+          jq -e '[.findings[] | select(.counted) | .code] == ["shear/unused_dependency"]' unused-deps.json
+          jq -e '[.versions[] | [.version, .status]] == [["1.70", "failed"]]' msrv.json
+          jq -e '[.lints[] | select(.level == "failure") | .lint] == ["function_missing"]' semver-checks.json
+      - uses: ./actions/lint
+        with:
+          working_dir: tests/fixtures/dirty
+          report_only: "true"
+          report_name: clippy-report-only
+          output_dir: ${{ runner.temp }}/reports
+      - uses: ./actions/semver_checks
+        with:
+          working_dir: tests/fixtures/semver/current
+          baseline_root: ${{ github.workspace }}/tests/fixtures/semver/baseline
+          report_only: "true"
+          report_name: semver-report-only
+          output_dir: ${{ runner.temp }}/reports
