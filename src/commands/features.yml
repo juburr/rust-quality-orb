@@ -24,9 +24,9 @@ parameters:
     enum: ["each_feature", "feature_powerset"]
     default: each_feature
     description: >
-      each_feature builds each feature on its own (and with none and all),
-      --each-feature; feature_powerset builds every combination of them up to
-      depth, --feature-powerset.
+      each_feature builds each feature on its own (and with no features, the
+      default ones and all of them), --each-feature; feature_powerset builds
+      every combination of them up to depth, --feature-powerset.
   depth:
     type: string
     default: "2"

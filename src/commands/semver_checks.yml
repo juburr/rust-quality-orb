@@ -4,8 +4,9 @@ description: >
   by default the newest release on crates.io, or a git revision, a version or
   a directory. Needs cargo-semver-checks (install with tools:
   cargo-semver-checks), whose release must read the job's toolchain's rustdoc
-  JSON. A breaking change the version number doesn't allow is a finding;
-  cargo-semver-checks failing fails the step whatever report_only says.
+  JSON (0.51.0 reads Rust 1.97 to 1.99's). A breaking change the version
+  number doesn't allow is a finding; cargo-semver-checks failing fails the
+  step whatever report_only says.
 parameters:
   working_dir:
     type: string

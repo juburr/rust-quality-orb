@@ -1,0 +1,27 @@
+description: >
+  Split the tests across parallel nodes: with partition, each node runs its
+  share of the tests (nextest's --partition hash), and only the first runs the
+  doctests. Retries catch flaky tests, which pass with a warning that names
+  them.
+
+usage:
+  version: 2.1
+  orbs:
+    rust-quality: juburr/rust-quality-orb@0.1.0
+  jobs:
+    test:
+      docker:
+        - image: cimg/rust:1.99.1
+      parallelism: 4
+      steps:
+        - checkout
+        - rust-quality/install:
+            tools: cargo-nextest
+        - rust-quality/test:
+            partition: true
+            retries: "2"
+            profile: ci
+  workflows:
+    test:
+      jobs:
+        - test

@@ -34,9 +34,9 @@ inputs:
     default: "false"
   mode:
     description: >
-      each_feature builds each feature on its own (and with none and all),
-      --each-feature; feature_powerset builds every combination of them up to
-      depth, --feature-powerset.
+      each_feature builds each feature on its own (and with no features, the
+      default ones and all of them), --each-feature; feature_powerset builds
+      every combination of them up to depth, --feature-powerset.
     default: each_feature
   no_dev_deps:
     description: >

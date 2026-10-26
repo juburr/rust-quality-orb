@@ -1,0 +1,30 @@
+description: >
+  Check with one exact Rust release, without rustup: install with tools: rust
+  downloads the release's manifest, verified against this orb's checksum
+  table, and each component, verified against the manifest, and puts it first
+  on the PATH. Every job then builds with the same compiler, whatever the
+  image ships. Use tools: rustup instead to follow rust-toolchain.toml.
+
+usage:
+  version: 2.1
+  orbs:
+    rust-quality: juburr/rust-quality-orb@0.1.0
+  jobs:
+    quality:
+      machine:
+        image: ubuntu-2404:current
+      steps:
+        - checkout
+        - rust-quality/install:
+            tools: rust cargo-nextest cargo-llvm-cov
+            rust_version: 1.99.1
+            components: clippy,rustfmt,llvm-tools
+        - rust-quality/lint
+        - rust-quality/coverage:
+            nextest: true
+            coverage_min: "80"
+            formats: lcov,html
+  workflows:
+    quality:
+      jobs:
+        - quality

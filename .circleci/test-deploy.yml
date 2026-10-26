@@ -1,0 +1,519 @@
+version: 2.1
+orbs:
+  # Your orb will be automatically injected here during the pipeline.
+  # Reference your orb's jobs and commands below as they will exist when built.
+  orb-tools: circleci/orb-tools@12.5
+  # The orb definition is intentionally not included here. It will be injected into the pipeline.
+  rust-quality-orb: {}
+
+# Use this tag to ensure test jobs always run,
+# even though the downstream publish job will only run on release tags.
+filters: &filters
+  tags:
+    only: /.*/
+
+# Filter for release tags.
+release-filters: &release-filters
+  branches:
+    ignore: /.*/
+  tags:
+    only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
+
+# The fixtures: clean, a workspace every check passes; dirty, a package in which every check
+# finds something; and semver, a crate's baseline and a current version that drops a public
+# function in a patch release.
+clean: &clean tests/fixtures/clean
+dirty: &dirty tests/fixtures/dirty
+semver_current: &semver_current tests/fixtures/semver/current
+semver_baseline: &semver_baseline $HOME/project/tests/fixtures/semver/baseline
+
+# Every tool the checks use, and a pinned Rust with the components they need.
+install: &install
+  tools: rust cargo-nextest cargo-llvm-cov cargo-hack cargo-semver-checks cargo-shear
+  components: clippy,rustfmt,llvm-tools
+
+jobs:
+  # Installs Rust and every tool on amd64, on an image whose own Rust comes from rustup: the
+  # pinned Rust must come first on the PATH, and each tool must be the binary its checksum table
+  # pins. Then installs each again, which must come from the cache.
+  install-test:
+    docker:
+      - image: cimg/rust:1.99.1
+    steps:
+      - checkout
+      - rust-quality-orb/install: *install
+      - run:
+          name: Verify Install
+          command: |
+            default() { yq ".parameters.${1//-/_}_version.default" src/commands/install.yml; }
+            [[ "$(command -v cargo)" == "${HOME}/.rust-quality-orb/rust/bin/cargo" ]]
+            cargo --version | grep -q "^cargo $(default rust) "
+            rustc --version | grep -q "^rustc $(default rust) "
+            cargo clippy --version
+            cargo fmt --version
+            ls "${HOME}"/.rust-quality-orb/rust/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-cov
+            jq -e '[.components[] | select(test("^(clippy|rustfmt|llvm-tools)"))] | length == 3' "${HOME}/.rust-quality-orb/rust/bin/.cargo.install.json"
+            for tool in cargo-nextest cargo-llvm-cov cargo-hack cargo-semver-checks cargo-shear; do
+              binary=$(command -v "${tool}")
+              [[ "${binary}" == "${HOME}/.rust-quality-orb/bin/${tool}" ]]
+              entry=$(grep -F "[\"$(default "${tool}")/amd64\"]=" "src/install/${tool}/install.sh" | tail -n 1 | cut -d'"' -f4)
+              [[ "$(sha512sum "${binary}" | awk '{ print $1 }')" == "${entry}" ]] || { echo "FAIL: ${tool} is not the pinned binary."; exit 1; }
+              jq -e --arg sha "${entry}" '.binary_sha512 == $sha and .method == "prebuilt"' "${HOME}/.rust-quality-orb/bin/.${tool}.install.json"
+              cargo "${tool#cargo-}" --version
+            done
+      - run:
+          name: Verify A Second Install Uses The Cache
+          command: |
+            for tool in cargo-nextest cargo-llvm-cov cargo-hack cargo-semver-checks cargo-shear; do
+              version=$(yq ".parameters.${tool//-/_}_version.default" src/commands/install.yml)
+              PARAM_VERSION="${version}" PARAM_VERIFY_CHECKSUMS=strict PARAM_INSTALL_PATH="" PARAM_CACHING=true \
+                PARAM_DOWNLOAD_BASE_URL="" bash "src/install/${tool}/install.sh" 2>&1 | tee "/tmp/${tool}-second-install.log"
+              grep -q "from the cache." "/tmp/${tool}-second-install.log"
+              if grep -q "^Downloading" "/tmp/${tool}-second-install.log"; then
+                echo "FAIL: the second install of ${tool} downloaded it again."
+                exit 1
+              fi
+            done
+            PARAM_VERSION="$(yq '.parameters.rust_version.default' src/commands/install.yml)" PARAM_VERIFY_CHECKSUMS=strict \
+              PARAM_INSTALL_PATH="" PARAM_CACHING=true PARAM_DOWNLOAD_BASE_URL="" PARAM_COMPONENTS=clippy,rustfmt,llvm-tools \
+              PARAM_TARGETS="" bash src/install/rust/install.sh 2>&1 | tee /tmp/rust-second-install.log
+            grep -q "from the cache." /tmp/rust-second-install.log
+            if grep -q "(downloaded)" /tmp/rust-second-install.log; then
+              echo "FAIL: the second install of Rust downloaded a component again."
+              exit 1
+            fi
+            cargo --version
+  # Installs rustup and a toolchain on an image without Rust: first one named by the toolchain
+  # parameter, with a component and a target, then the one a rust-toolchain.toml names.
+  rustup-test:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - rust-quality-orb/install:
+          tools: rustup
+          toolchain: 1.85.0
+          components: clippy
+          targets: wasm32-unknown-unknown
+      - run:
+          name: Verify rustup And The Toolchain
+          command: |
+            rustup --version 2> /dev/null | grep -q "^rustup $(yq '.parameters.rustup_version.default' src/commands/install.yml) "
+            [[ "$(command -v rustup)" == "${HOME}/.cargo/bin/rustup" ]]
+            rustup show active-toolchain | grep -q '^1.85.0-'
+            cargo --version | grep -q '^cargo 1.85.0 '
+            cargo clippy --version
+            rustup target list --installed | grep -qx wasm32-unknown-unknown
+            jq -e '.method == "prebuilt"' "${HOME}/.cargo/bin/.rustup.install.json"
+      - run:
+          name: Pin Another Toolchain
+          command: printf '[toolchain]\nchannel = "1.86.0"\nprofile = "minimal"\n' > rust-toolchain.toml
+      - rust-quality-orb/install_rustup
+      - run:
+          name: Verify The Toolchain rust-toolchain.toml Names
+          command: |
+            rustup show active-toolchain | grep -q '^1.86.0-'
+            cargo --version | grep -q '^cargo 1.86.0 '
+            rm rust-toolchain.toml
+  # Runs the install scripts under the verify_checksums default declared in install.yml against
+  # real releases that have no checksum in the tables, and against a download_base_url mirror: a
+  # local HTTPS server serving first the real cargo-shear release and then a tampered copy, which
+  # must be rejected.
+  checksum-test:
+    docker:
+      - image: cimg/python:3.13
+    environment:
+      UNLISTED_CARGO_HACK: 0.6.37
+    steps:
+      - checkout
+      - run:
+          name: Unlisted Versions Fail Closed By Default
+          command: |
+            REPO_DIR=$(pwd)
+            DEFAULT_MODE=$(yq '.parameters.verify_checksums.default' src/commands/install.yml)
+            echo "verify_checksums default: ${DEFAULT_MODE}"
+            for spec in "cargo-hack:${UNLISTED_CARGO_HACK}" "rust:1.55.0" "rustup:1.27.1"; do
+              tool=${spec%%:*}
+              version=${spec#*:}
+              cd "$(mktemp -d)" && mkdir bin
+              if HOME="$(pwd)" PARAM_INSTALL_PATH="$(pwd)/bin" PARAM_VERIFY_CHECKSUMS="${DEFAULT_MODE}" PARAM_VERSION="${version}" \
+                  PARAM_CACHING=true PARAM_DOWNLOAD_BASE_URL="" PARAM_COMPONENTS="" PARAM_TARGETS="" PARAM_TOOLCHAIN=none \
+                  bash "${REPO_DIR}/src/install/${tool}/install.sh"; then
+                echo "FAIL: install succeeded for unlisted ${tool} ${version} under the default."
+                exit 1
+              fi
+              if [[ -n "$(ls -A bin)" || -n "$(ls -A | grep -vx bin)" ]]; then
+                echo "FAIL: install downloaded or installed ${tool} before rejecting the unlisted version."
+                ls -laR
+                exit 1
+              fi
+              echo "PASS: unlisted ${tool} ${version} failed closed before downloading anything."
+            done
+      - run:
+          name: known_versions Opt-Out Installs Unlisted Version
+          command: |
+            REPO_DIR=$(pwd)
+            cd "$(mktemp -d)" && mkdir bin
+            PARAM_INSTALL_PATH="$(pwd)/bin" PARAM_VERIFY_CHECKSUMS=known_versions PARAM_VERSION="${UNLISTED_CARGO_HACK}" \
+              PARAM_CACHING=false PARAM_DOWNLOAD_BASE_URL="" bash "${REPO_DIR}/src/install/cargo-hack/install.sh" 2>&1 | tee install.log
+            grep -q "has no checksum for cargo-hack ${UNLISTED_CARGO_HACK}" install.log
+            grep -q "UNVERIFIED" install.log
+            bin/cargo-hack hack --version | grep -q "${UNLISTED_CARGO_HACK}"
+      - run:
+          name: A Mirror Serving A Tampered Release Is Rejected
+          command: |
+            REPO_DIR=$(pwd)
+            VERSION=$(yq '.parameters.version.default' src/commands/install_cargo_shear.yml)
+            ASSET="cargo-shear-x86_64-unknown-linux-musl.tar.gz"
+            MIRROR=$(mktemp -d)
+            DIR="${MIRROR}/www/Boshen/cargo-shear/releases/download/v${VERSION}"
+            mkdir -p "${DIR}"
+            curl --fail --silent --show-error --location --proto '=https' --output "${DIR}/${ASSET}" \
+              "https://github.com/Boshen/cargo-shear/releases/download/v${VERSION}/${ASSET}"
+            openssl req -x509 -newkey rsa:2048 -nodes -keyout "${MIRROR}/key.pem" -out "${MIRROR}/cert.pem" -days 1 \
+              -subj /CN=localhost -addext subjectAltName=DNS:localhost 2> /dev/null
+            cat > "${MIRROR}/serve.py" \<< 'EOF'
+            import functools, http.server, ssl, sys
+            handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
+            server = http.server.HTTPServer(("127.0.0.1", 8443), handler)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(sys.argv[2], sys.argv[3])
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+            server.serve_forever()
+            EOF
+            python3 "${MIRROR}/serve.py" "${MIRROR}/www" "${MIRROR}/cert.pem" "${MIRROR}/key.pem" > "${MIRROR}/serve.log" 2>&1 &
+            SERVER=$!
+            trap 'kill "${SERVER}"' EXIT
+            sleep 2
+            install_from_mirror() {
+              rm -rf "${MIRROR}/bin" && mkdir "${MIRROR}/bin"
+              CURL_CA_BUNDLE="${MIRROR}/cert.pem" PARAM_INSTALL_PATH="${MIRROR}/bin" PARAM_VERIFY_CHECKSUMS=strict \
+                PARAM_VERSION="${VERSION}" PARAM_CACHING=false PARAM_DOWNLOAD_BASE_URL=https://localhost:8443 \
+                bash "${REPO_DIR}/src/install/cargo-shear/install.sh"
+            }
+            install_from_mirror 2>&1 | tee "${MIRROR}/good.log"
+            grep -q "Downloading https://localhost:8443/Boshen/cargo-shear/releases/download/v${VERSION}/${ASSET}" "${MIRROR}/good.log"
+            "${MIRROR}/bin/cargo-shear" shear --version | grep -q "${VERSION}"
+            printf 'tampered' >> "${DIR}/${ASSET}"
+            if install_from_mirror > "${MIRROR}/bad.log" 2>&1; then
+              cat "${MIRROR}/bad.log"
+              echo "FAIL: a tampered release from the mirror was installed."
+              exit 1
+            fi
+            cat "${MIRROR}/bad.log"
+            grep -q "download was rejected and not installed" "${MIRROR}/bad.log"
+            [[ ! -e "${MIRROR}/bin/cargo-shear" ]]
+            echo "PASS: the tampered release was rejected."
+      - run:
+          name: install Refuses A Tool It Doesn't Know, And Two Toolchains
+          command: |
+            if PARAM_TOOLS="cargo-nextest cargo-udeps" bash src/scripts/install_tools.sh; then
+              echo "FAIL: install accepted a tool it doesn't install."
+              exit 1
+            fi
+            if PARAM_TOOLS="rust rustup" bash src/scripts/install_tools.sh; then
+              echo "FAIL: install accepted both rust and rustup."
+              exit 1
+            fi
+  # Installs Rust and every tool on an Arm machine, and runs the checks there.
+  arm64-test:
+    docker:
+      - image: cimg/rust:1.99.1
+    resource_class: arm.medium
+    steps:
+      - checkout
+      - rust-quality-orb/install: *install
+      - run:
+          name: Verify arm64 Install
+          command: |
+            if [[ "$(uname -m)" != "aarch64" ]]; then
+              echo "FAIL: expected an aarch64 machine, got $(uname -m)."
+              exit 1
+            fi
+            for binary in "$(command -v cargo)" "$(command -v rustc)" "${HOME}"/.rust-quality-orb/bin/cargo-*; do
+              machine=$(readelf --file-header "${binary}" | awk -F: '/Machine:/ { gsub(/^ +/, "", $2); print $2 }')
+              echo "${binary}: ${machine}"
+              [[ "${machine}" == AArch64 ]] || { echo "FAIL: ${binary} is not an arm64 build."; exit 1; }
+            done
+      - rust-quality-orb/lint:
+          working_dir: *clean
+          output_dir: /tmp/reports/arm64
+      - rust-quality-orb/test:
+          working_dir: *clean
+          output_dir: /tmp/reports/arm64
+      - rust-quality-orb/coverage:
+          working_dir: *clean
+          coverage_min: "50"
+          output_dir: /tmp/reports/arm64
+      - rust-quality-orb/unused_deps:
+          working_dir: *clean
+          output_dir: /tmp/reports/arm64
+      - run:
+          name: Verify The Reports
+          command: |
+            cd /tmp/reports/arm64
+            jq -e '.complete and .findings == []' clippy.json
+            jq -e '.nextest.failed == 0 and .doctests.passed == 1' nextest.json
+            jq -e '.data[0].totals.lines.covered > 0' coverage.json
+  # Every check passes on the clean fixture, with the real tools, and writes its reports.
+  checks-test:
+    docker:
+      - image: cimg/rust:1.99.1
+    steps:
+      - checkout
+      - rust-quality-orb/install: *install
+      - rust-quality-orb/fmt:
+          working_dir: *clean
+          run_record: true
+          output_dir: /tmp/reports/clean
+      - rust-quality-orb/lint:
+          working_dir: *clean
+          locked: true
+          run_record: true
+          output_dir: /tmp/reports/clean
+      - rust-quality-orb/docs:
+          working_dir: *clean
+          run_record: true
+          output_dir: /tmp/reports/clean
+      - rust-quality-orb/test:
+          working_dir: *clean
+          run_record: true
+          output_dir: /tmp/reports/clean
+      - rust-quality-orb/coverage:
+          working_dir: *clean
+          nextest: true
+          coverage_min: "50"
+          formats: lcov,cobertura,html
+          run_record: true
+          output_dir: /tmp/reports/clean
+      - rust-quality-orb/features:
+          working_dir: *clean
+          mode: feature_powerset
+          run_record: true
+          output_dir: /tmp/reports/clean
+      - rust-quality-orb/unused_deps:
+          working_dir: *clean
+          deny_warnings: true
+          run_record: true
+          output_dir: /tmp/reports/clean
+      - rust-quality-orb/msrv:
+          working_dir: *clean
+          toolchain_source: rust
+          run_record: true
+          output_dir: /tmp/reports/clean
+      - rust-quality-orb/semver_checks:
+          working_dir: *semver_current
+          baseline_root: *semver_baseline
+          release_type: major
+          run_record: true
+          output_dir: /tmp/reports/clean
+      - run:
+          name: Verify The Reports
+          command: |
+            cd /tmp/reports/clean
+            jq -e '.unformatted == []' fmt.json
+            jq -e '.complete and .findings == [] and .errors == []' clippy.json docs.json
+            jq -e '.version == "2.1.0" and (.runs | length) == 1 and .runs[0].results == []' clippy.sarif
+            jq -e '.nextest.failed == 0 and .nextest.passed == 2 and .doctests.passed == 1' nextest.json
+            jq -e '.data[0].totals.lines.covered > 0' coverage.json
+            [[ -s coverage.lcov && -s coverage.cobertura.xml && -s coverage-html/html/index.html ]]
+            jq -e '[.combinations[] | select(.status == "failed")] == [] and (.combinations | length) > 1' features.json
+            jq -e '.findings == []' unused-deps.json
+            jq -e '[.versions[] | [.version, .source, .status]] == [["1.70", "rust", "passed"]]' msrv.json
+            jq -e '.lints == [] and .packages[0].name == "shapes"' semver-checks.json
+            # Every record names the tool the orb installed, with its install record.
+            for name in nextest coverage features unused-deps semver-checks; do
+              jq -e '.outcome == "passed" and .tool.install.method == "prebuilt"' "${name}.run-record.json"
+            done
+            jq -e '.toolchain.cargo.install.tool == "Rust" and (.toolchain.rustc.version | startswith("rustc "))' clippy.run-record.json
+            jq -e '.ci.provider == "circleci" and .workspace_root != null' fmt.run-record.json
+            for name in fmt clippy docs coverage features unused-deps msrv semver-checks; do
+              grep -q '<testsuite ' "junit/${name}.xml"
+            done
+            grep -q '<testsuite' junit/nextest/nextest.xml
+            grep -q '<testsuite ' junit/nextest/doctests.xml
+            [[ -z "$(git -C ~/project status --porcelain)" ]] || { git -C ~/project status; echo "FAIL: a check changed the checkout."; exit 1; }
+  # Every check finds what is wrong with the dirty and semver fixtures: with report_only, it passes
+  # and writes the findings; by default, it fails. A check that can't complete fails even with
+  # report_only.
+  findings-test:
+    docker:
+      - image: cimg/rust:1.99.1
+    steps:
+      - checkout
+      - rust-quality-orb/install: *install
+      - rust-quality-orb/fmt:
+          working_dir: *dirty
+          report_only: true
+          output_dir: /tmp/reports/findings
+      - rust-quality-orb/lint:
+          working_dir: *dirty
+          report_only: true
+          output_dir: /tmp/reports/findings
+      - rust-quality-orb/docs:
+          working_dir: *dirty
+          report_only: true
+          output_dir: /tmp/reports/findings
+      - rust-quality-orb/coverage:
+          working_dir: *clean
+          coverage_min: "100"
+          report_only: true
+          output_dir: /tmp/reports/findings
+      - rust-quality-orb/features:
+          working_dir: *dirty
+          report_only: true
+          output_dir: /tmp/reports/findings
+      - rust-quality-orb/unused_deps:
+          working_dir: *dirty
+          report_only: true
+          output_dir: /tmp/reports/findings
+      - rust-quality-orb/msrv:
+          working_dir: *dirty
+          toolchain_source: rust
+          report_only: true
+          output_dir: /tmp/reports/findings
+      - rust-quality-orb/semver_checks:
+          working_dir: *semver_current
+          baseline_root: *semver_baseline
+          report_only: true
+          output_dir: /tmp/reports/findings
+      - run:
+          name: Verify report_only Reported The Findings
+          command: |
+            cd /tmp/reports/findings
+            jq -e '.unformatted == ["src/format.rs"]' fmt.json
+            grep -q '^-pub fn number(n:u32)' fmt.diff
+            jq -e '.complete and any(.findings[]; .code == "clippy::needless_return" and .file == "src/lib.rs")' clippy.json
+            jq -e 'any(.runs[0].results[]; .ruleId == "clippy::needless_return")' clippy.sarif
+            jq -e '.complete and any(.findings[]; .code == "rustdoc::broken_intra_doc_links")' docs.json
+            jq -e '.data[0].totals.lines.covered < .data[0].totals.lines.count' coverage.json
+            jq -e '[.combinations[] | select(.status == "failed") | .command] | length == 1 and (.[0] | test("extra"))' features.json
+            jq -e '[.findings[] | select(.counted) | [.code, .file, .line]] == [["shear/unused_dependency", "Cargo.toml", 13]]' unused-deps.json
+            jq -e '[.versions[] | [.version, .status]] == [["1.70", "failed"]]' msrv.json
+            grep -q 'LazyLock' msrv-1.70.log
+            jq -e '[.lints[] | select(.level == "failure") | .lint] == ["function_missing"]' semver-checks.json
+            jq -e 'any(.lints[0].items[]; test("square_perimeter"))' semver-checks.json
+      - run:
+          name: Verify The Checks Fail By Default
+          command: |
+            expect_failure() {
+              local says=$1
+              shift
+              if bash tests/run_command.sh "$@" > /tmp/run.log 2>&1; then
+                cat /tmp/run.log
+                echo "FAIL: $* passed."
+                exit 1
+              fi
+              cat /tmp/run.log
+              grep -qF -- "${says}" /tmp/run.log || { echo "FAIL: $* did not say: ${says}"; exit 1; }
+            }
+            expect_failure "ERROR: rustfmt would change 1 file." fmt working_dir=tests/fixtures/dirty
+            expect_failure "ERROR: clippy found" lint working_dir=tests/fixtures/dirty
+            expect_failure "ERROR: rustdoc found" docs working_dir=tests/fixtures/dirty
+            expect_failure "doubles_wrongly" test working_dir=tests/fixtures/dirty
+            expect_failure "below coverage_min (100%)" coverage working_dir=tests/fixtures/clean coverage_min=100
+            expect_failure "ERROR: 1 feature combination doesn't build." features working_dir=tests/fixtures/dirty
+            expect_failure "ERROR: cargo-shear found 1 problem" unused_deps working_dir=tests/fixtures/dirty
+            expect_failure "fails on 1.70" msrv working_dir=tests/fixtures/dirty toolchain_source=rust
+            expect_failure "ERROR: 1 semver lint fails" semver_checks working_dir=tests/fixtures/semver/current \
+              "baseline_root=${HOME}/project/tests/fixtures/semver/baseline"
+            # A tool that can't complete fails even with report_only.
+            printf 'pub fn broken() -> u32 { "text" }\n' >> tests/fixtures/dirty/unused-helper/src/lib.rs
+            expect_failure "ERROR: The code did not compile" lint working_dir=tests/fixtures/dirty report_only=true
+            expect_failure "ERROR: The documentation could not be built" docs working_dir=tests/fixtures/dirty report_only=true
+            expect_failure "the tests did not build" test working_dir=tests/fixtures/dirty
+            git -C ~/project checkout tests/fixtures/dirty/unused-helper/src/lib.rs
+            printf 'pub fn broken( {\n' >> tests/fixtures/dirty/unused-helper/src/lib.rs
+            expect_failure "ERROR: rustfmt could not check every file" fmt working_dir=tests/fixtures/dirty report_only=true
+            git -C ~/project checkout tests/fixtures/dirty/unused-helper/src/lib.rs
+            expect_failure "cargo-hack failed before it could run every combination" features working_dir=tests/fixtures/dirty \
+              "extra_args=--partition 9/2" report_only=true
+            expect_failure "cargo-semver-checks could not complete the check" semver_checks working_dir=tests/fixtures/semver/current \
+              baseline_rev=no-such-revision report_only=true
+            [[ -z "$(git -C ~/project status --porcelain)" ]] || { git -C ~/project status; echo "FAIL: a check changed the checkout."; exit 1; }
+  # msrv with the image's rustup, which toolchain_source auto picks: the clean workspace builds
+  # on its rust-version, the dirty one doesn't.
+  msrv-rustup-test:
+    docker:
+      - image: cimg/rust:1.99.1
+    steps:
+      - checkout
+      - rust-quality-orb/msrv:
+          working_dir: *clean
+          run_record: true
+          output_dir: /tmp/reports/msrv
+      - run:
+          name: Verify The Report, And That Dirty Fails
+          command: |
+            jq -e '[.versions[] | [.version, .source, .status]] == [["1.70", "rustup", "passed"]]' /tmp/reports/msrv/msrv.json
+            if bash tests/run_command.sh msrv working_dir=tests/fixtures/dirty > /tmp/run.log 2>&1; then
+              cat /tmp/run.log
+              echo "FAIL: msrv passed on the dirty fixture."
+              exit 1
+            fi
+            cat /tmp/run.log
+            grep -qF "fails on 1.70" /tmp/run.log
+  # A machine executor without Rust: install installs a pinned Rust, and the checks run with it.
+  machine-test:
+    machine:
+      image: ubuntu-2404:current
+    steps:
+      - checkout
+      - rust-quality-orb/install:
+          tools: rust cargo-nextest
+      - rust-quality-orb/fmt:
+          working_dir: *clean
+          output_dir: /tmp/reports/machine
+      - rust-quality-orb/lint:
+          working_dir: *clean
+          output_dir: /tmp/reports/machine
+      - rust-quality-orb/test:
+          working_dir: *clean
+          output_dir: /tmp/reports/machine
+      - run:
+          name: Verify The Pinned Rust Ran The Checks
+          command: |
+            [[ "$(command -v cargo)" == "${HOME}/.rust-quality-orb/rust/bin/cargo" ]]
+            jq -e '.nextest.failed == 0 and .doctests.passed == 1' /tmp/reports/machine/nextest.json
+
+workflows:
+  test-deploy:
+    jobs:
+      # Make sure to include "filters: *filters" in every test job you want to run as part of your deployment.
+      # Test your orb's commands in a custom job and test your orb's jobs directly as a part of this workflow.
+      - install-test:
+          filters: *filters
+      - rustup-test:
+          filters: *filters
+      - checksum-test:
+          filters: *filters
+      - arm64-test:
+          filters: *filters
+      - checks-test:
+          filters: *filters
+      - findings-test:
+          filters: *filters
+      - msrv-rustup-test:
+          filters: *filters
+      - machine-test:
+          filters: *filters
+      # The orb must be re-packed for publishing, and saved to the workspace.
+      - orb-tools/pack:
+          filters: *release-filters
+      - orb-tools/publish:
+          orb_name: juburr/rust-quality-orb
+          vcs_type: << pipeline.project.type >>
+          pub_type: production
+          # Ensure this job requires all test jobs and the pack job.
+          requires:
+            - orb-tools/pack
+            - install-test
+            - rustup-test
+            - checksum-test
+            - arm64-test
+            - checks-test
+            - findings-test
+            - msrv-rustup-test
+            - machine-test
+          context: orb-publishing
+          filters: *release-filters

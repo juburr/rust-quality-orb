@@ -159,8 +159,8 @@
                 "asset": { "description": "The file that was verified: the release asset, or Rust's channel manifest.", "type": "string" },
                 "asset_sha512": { "description": "The SHA-512 the orb's checksum table lists for it; empty when it was not verified.", "type": "string" },
                 "verify_checksums": { "enum": ["strict", "known_versions", "false"] },
-                "components": { "description": "Rust: the optional components installed.", "type": "array", "items": { "type": "string" } },
-                "targets": { "description": "Rust: the targets whose standard library was installed besides the host's.", "type": "array", "items": { "type": "string" } }
+                "components": { "description": "Rust: the packages installed from the release's manifest, by their name there (rustc, cargo, rust-std, clippy-preview and so on).", "type": "array", "items": { "type": "string" } },
+                "targets": { "description": "Rust: the targets whose standard library was installed, the machine's own first.", "type": "array", "items": { "type": "string" } }
               }
             }
           ]
