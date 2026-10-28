@@ -101,7 +101,7 @@ flowchart LR
 version: 2.1
 
 orbs:
-  rust-quality: juburr/rust-quality-orb@0.1.0
+  rust-quality: juburr/rust-quality-orb@0.1.1
 
 jobs:
   quality:
@@ -137,13 +137,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: juburr/rust-quality-orb/actions/install@v0.1.0
+      - uses: juburr/rust-quality-orb/actions/install@v0.1.1
         with:
           tools: rust cargo-nextest
-      - uses: juburr/rust-quality-orb/actions/fmt@v0.1.0
-      - uses: juburr/rust-quality-orb/actions/lint@v0.1.0
-      - uses: juburr/rust-quality-orb/actions/docs@v0.1.0
-      - uses: juburr/rust-quality-orb/actions/test@v0.1.0
+      - uses: juburr/rust-quality-orb/actions/fmt@v0.1.1
+      - uses: juburr/rust-quality-orb/actions/lint@v0.1.1
+      - uses: juburr/rust-quality-orb/actions/docs@v0.1.1
+      - uses: juburr/rust-quality-orb/actions/test@v0.1.1
 ```
 
 Each check writes its reports to `/tmp/rust-quality-reports` and stores them as artifacts, even when it fails. See [GitHub Actions](#-github-actions) for how the actions map to the orb's commands.
@@ -411,24 +411,24 @@ Each of the orb's commands has a GitHub Action of the same name. The actions run
 
 | Action | Orb command |
 | --- | --- |
-| `juburr/rust-quality-orb/actions/install@v0.1.0` | [`rust-quality/install`](#rust-qualityinstall) |
-| `juburr/rust-quality-orb/actions/install_rust@v0.1.0`, `install_rustup`, `install_cargo_nextest`, `install_cargo_llvm_cov`, `install_cargo_hack`, `install_cargo_semver_checks`, `install_cargo_shear` | [`rust-quality/install_<tool>`](#rust-qualityinstall_tool) |
-| `juburr/rust-quality-orb/actions/fmt@v0.1.0` | [`rust-quality/fmt`](#rust-qualityfmt) |
-| `juburr/rust-quality-orb/actions/lint@v0.1.0` | [`rust-quality/lint`](#rust-qualitylint) |
-| `juburr/rust-quality-orb/actions/docs@v0.1.0` | [`rust-quality/docs`](#rust-qualitydocs) |
-| `juburr/rust-quality-orb/actions/test@v0.1.0` | [`rust-quality/test`](#rust-qualitytest) |
-| `juburr/rust-quality-orb/actions/coverage@v0.1.0` | [`rust-quality/coverage`](#rust-qualitycoverage) |
-| `juburr/rust-quality-orb/actions/msrv@v0.1.0` | [`rust-quality/msrv`](#rust-qualitymsrv) |
-| `juburr/rust-quality-orb/actions/features@v0.1.0` | [`rust-quality/features`](#rust-qualityfeatures) |
-| `juburr/rust-quality-orb/actions/unused_deps@v0.1.0` | [`rust-quality/unused_deps`](#rust-qualityunused_deps) |
-| `juburr/rust-quality-orb/actions/semver_checks@v0.1.0` | [`rust-quality/semver_checks`](#rust-qualitysemver_checks) |
+| `juburr/rust-quality-orb/actions/install@v0.1.1` | [`rust-quality/install`](#rust-qualityinstall) |
+| `juburr/rust-quality-orb/actions/install_rust@v0.1.1`, `install_rustup`, `install_cargo_nextest`, `install_cargo_llvm_cov`, `install_cargo_hack`, `install_cargo_semver_checks`, `install_cargo_shear` | [`rust-quality/install_<tool>`](#rust-qualityinstall_tool) |
+| `juburr/rust-quality-orb/actions/fmt@v0.1.1` | [`rust-quality/fmt`](#rust-qualityfmt) |
+| `juburr/rust-quality-orb/actions/lint@v0.1.1` | [`rust-quality/lint`](#rust-qualitylint) |
+| `juburr/rust-quality-orb/actions/docs@v0.1.1` | [`rust-quality/docs`](#rust-qualitydocs) |
+| `juburr/rust-quality-orb/actions/test@v0.1.1` | [`rust-quality/test`](#rust-qualitytest) |
+| `juburr/rust-quality-orb/actions/coverage@v0.1.1` | [`rust-quality/coverage`](#rust-qualitycoverage) |
+| `juburr/rust-quality-orb/actions/msrv@v0.1.1` | [`rust-quality/msrv`](#rust-qualitymsrv) |
+| `juburr/rust-quality-orb/actions/features@v0.1.1` | [`rust-quality/features`](#rust-qualityfeatures) |
+| `juburr/rust-quality-orb/actions/unused_deps@v0.1.1` | [`rust-quality/unused_deps`](#rust-qualityunused_deps) |
+| `juburr/rust-quality-orb/actions/semver_checks@v0.1.1` | [`rust-quality/semver_checks`](#rust-qualitysemver_checks) |
 
-The per-tool install actions are `juburr/rust-quality-orb/actions/install_rust@v0.1.0`, `juburr/rust-quality-orb/actions/install_rustup@v0.1.0`, `juburr/rust-quality-orb/actions/install_cargo_nextest@v0.1.0`, `juburr/rust-quality-orb/actions/install_cargo_llvm_cov@v0.1.0`, `juburr/rust-quality-orb/actions/install_cargo_hack@v0.1.0`, `juburr/rust-quality-orb/actions/install_cargo_semver_checks@v0.1.0` and `juburr/rust-quality-orb/actions/install_cargo_shear@v0.1.0`.
+The per-tool install actions are `juburr/rust-quality-orb/actions/install_rust@v0.1.1`, `juburr/rust-quality-orb/actions/install_rustup@v0.1.1`, `juburr/rust-quality-orb/actions/install_cargo_nextest@v0.1.1`, `juburr/rust-quality-orb/actions/install_cargo_llvm_cov@v0.1.1`, `juburr/rust-quality-orb/actions/install_cargo_hack@v0.1.1`, `juburr/rust-quality-orb/actions/install_cargo_semver_checks@v0.1.1` and `juburr/rust-quality-orb/actions/install_cargo_shear@v0.1.1`.
 
 To upload clippy's findings to GitHub code scanning (the job needs `permissions: security-events: write`), point the upload at the SARIF report:
 
 ```yaml
-      - uses: juburr/rust-quality-orb/actions/lint@v0.1.0
+      - uses: juburr/rust-quality-orb/actions/lint@v0.1.1
         with:
           report_only: "true"
       - uses: github/codeql-action/upload-sarif@v4
@@ -439,7 +439,7 @@ To upload clippy's findings to GitHub code scanning (the job needs `permissions:
 
 How they differ from the orb's commands:
 
-- **Versions.** An action is referenced by the repository's release tag, such as `v0.1.0`, the same tag the orb is published from. There is no moving major tag yet. For the strongest pinning, use the tag's commit SHA: `juburr/rust-quality-orb/actions/lint@<sha> # v0.1.0`.
+- **Versions.** An action is referenced by the repository's release tag, such as `v0.1.1`, the same tag the orb is published from. There is no moving major tag yet. For the strongest pinning, use the tag's commit SHA: `juburr/rust-quality-orb/actions/lint@<sha> # v0.1.1`.
 - **Inputs are strings.** Write booleans and numbers quoted, such as `report_only: "true"`.
 - **Environment variables.** The orb expands `$NAME` in its parameters with the CircleCI CLI, which GitHub's runners don't have, so the actions take values as they are. Use GitHub's expressions instead, such as `rust_version: ${{ vars.RUST_RELEASE }}`.
 - **Splitting tests.** `partition` reads CircleCI's `CIRCLE_NODE_TOTAL` and `CIRCLE_NODE_INDEX`. On GitHub, set them in the job's `env` from a matrix to split the tests the same way.
