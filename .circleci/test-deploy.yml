@@ -388,6 +388,17 @@ jobs:
           baseline_root: *semver_baseline
           report_only: true
           output_dir: /tmp/reports/findings
+      # baseline_rev in a blobless clone, as CircleCI's checkout makes by default: cargo-semver-checks reads
+      # the baseline with gix, which can't fetch what the clone lacks, so the command fetches it first.
+      - run:
+          name: Make A Blobless Clone Whose Baseline Is Only In Its History
+          command: bash tests/make_semver_repo.sh /tmp/semver-repo
+      - rust-quality-orb/semver_checks:
+          working_dir: /tmp/semver-repo/partial
+          baseline_rev: origin/main
+          report_only: true
+          report_name: semver-partial
+          output_dir: /tmp/reports/findings
       - run:
           name: Verify report_only Reported The Findings
           command: |
@@ -404,6 +415,11 @@ jobs:
             grep -q 'LazyLock' msrv-1.70.log
             jq -e '[.lints[] | select(.level == "failure") | .lint] == ["function_missing"]' semver-checks.json
             jq -e 'any(.lints[0].items[]; test("square_perimeter"))' semver-checks.json
+            jq -e '[.lints[] | select(.level == "failure") | .lint] == ["function_missing"]' semver-partial.json
+            if git -C /tmp/semver-repo/partial rev-list --objects --missing=print 'origin/main^{tree}' | grep -q '^?'; then
+              echo "FAIL: the blobless clone still lacks objects of the baseline."
+              exit 1
+            fi
       - run:
           name: Verify The Checks Fail By Default
           command: |

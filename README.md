@@ -231,6 +231,8 @@ A `Cargo.lock` version 4 needs Rust 1.78 to read: for an older `rust-version`, k
     baseline_rev: origin/main
 ```
 
+CircleCI's `checkout` makes a blobless clone by default, which lacks the files of older commits. cargo-semver-checks reads the baseline revision with its own git library, which can't fetch them, so `semver_checks` first fetches the baseline's files the checkout lacks from its remote, in one request.
+
 Workspace members with `publish = false` are skipped unless `packages` names them.
 
 ### Check Feature Combinations and Targets
@@ -524,6 +526,7 @@ Hosts to allow (HTTPS, port 443) when running on a locked-down, self-hosted runn
 | `release-assets.githubusercontent.com`, `objects.githubusercontent.com` | `install` (the cargo tools) | Where GitHub redirects release downloads | The same |
 | `static.rust-lang.org` | `install` (`rust`, `rustup`), rustup's toolchains, `msrv` | Rust releases and rustup | `rust_download_base_url` (`download_base_url` for `msrv`) or `RUSTUP_DIST_SERVER` names a mirror; Rust comes from the cache |
 | `index.crates.io`, `static.crates.io` | Every check that resolves or builds your dependencies; `semver_checks`' default baseline | Crates, as cargo itself fetches them | Your `.cargo/config.toml` replaces crates.io with a mirror; `baseline_rev` or `baseline_root` names the baseline |
+| The checkout's own remote, such as `github.com` | `semver_checks` with `baseline_rev` in a partial clone (CircleCI's default blobless checkout) | The baseline's files the clone lacks | The checkout is a full clone (CircleCI: `checkout` with `method: full`) |
 | CircleCI's cache storage, or GitHub's | The install commands and actions with `caching: true` (the default), and `msrv` with `toolchain_source: rust` | `restore_cache`/`save_cache`, or `actions/cache` | `caching` is `false` |
 
 `HTTPS_PROXY` and `NO_PROXY` apply to every tool.

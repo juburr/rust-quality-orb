@@ -340,3 +340,23 @@ jobs:
           report_only: "true"
           report_name: semver-report-only
           output_dir: ${{ runner.temp }}/reports
+      # baseline_rev in a blobless clone, as CircleCI's checkout makes by default: cargo-semver-checks
+      # reads the baseline with gix, which can't fetch what the clone lacks, so the action fetches it first.
+      - name: Make a blobless clone whose baseline is only in its history
+        run: bash tests/make_semver_repo.sh "${RUNNER_TEMP}/semver-repo"
+      - uses: ./actions/semver_checks
+        with:
+          working_dir: ${{ runner.temp }}/semver-repo/partial
+          baseline_rev: origin/main
+          report_only: "true"
+          report_name: semver-partial
+          output_dir: ${{ runner.temp }}/reports
+      - name: Verify the baseline was fetched and checked
+        env:
+          REPORTS: ${{ runner.temp }}/reports
+        run: |
+          jq -e '[.lints[] | select(.level == "failure") | .lint] == ["function_missing"]' "${REPORTS}/semver-partial.json"
+          if git -C "${RUNNER_TEMP}/semver-repo/partial" rev-list --objects --missing=print 'origin/main^{tree}' | grep -q '^?'; then
+            echo "FAIL: the blobless clone still lacks objects of the baseline."
+            exit 1
+          fi

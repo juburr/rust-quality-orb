@@ -328,13 +328,26 @@ EOF
 # cargo-semver-checks: STUB_SEMVER is pass, fail (a failed lint, exit 100),
 # warn (a lint at warn level, exit 0), old-fail (a failed lint, exit 1, as
 # before 0.49.0), old-error (exit 1 with an error), error (exit 101) or none
-# (nothing checked, exit 0).
+# (nothing checked, exit 0). With --baseline-rev in a git repository, it
+# first reads every object of the revision's tree, as gix does, which can't
+# fetch what a partial clone lacks, and fails on the first one missing.
 {
     echo '#!/usr/bin/env bash'
     record
     cat << 'EOF'
 [[ "$1" == semver-checks ]] || exit 2
 if [[ "$2" == --version ]]; then echo "cargo-semver-checks 0.51.0"; exit 0; fi
+prev=""
+for arg in "$@"; do
+    if [[ "${prev}" == --baseline-rev ]] && tree=$(git rev-parse --verify --quiet "${arg}^{tree}" 2> /dev/null); then
+        lacking=$(git rev-list --objects --missing=print "${tree}" | awk '/^[?]/ && !n { print substr($0, 2); n = 1 }')
+        if [[ -n "${lacking}" ]]; then
+            echo "error: An object with id ${lacking} could not be found" >&2
+            exit 101
+        fi
+    fi
+    prev=${arg}
+done
 mode=${STUB_SEMVER:-pass}
 case "${mode}" in
     error) echo "error: rustc version is not high enough: >=1.90.0 needed, got 1.85.0" >&2; exit 101 ;;
@@ -949,6 +962,29 @@ check "passes baseline_root, release_type and packages" called_with cargo-semver
 check "recording the baseline's manifest" json_is "$(report semver-checks.run-record.json)" '.inputs[] | select(.role == "baseline") | .path' "${CASE}/fx/semver/baseline/Cargo.toml"
 run semver_checks semver/current baseline_rev=origin/main
 check "passes baseline_rev" called_with cargo-semver-checks --baseline-rev origin/main
+# baseline_rev in a blobless clone, as CircleCI's checkout makes by default:
+# the baseline's files are only in the history, which gix can't fetch.
+bash "${ROOT}/tests/make_semver_repo.sh" "${CASE}/semver-repo" "${CASE}/fx" > /dev/null
+mv "${CASE}/semver-repo/partial" "${CASE}/fx/semver-partial"
+SEMVER_SOURCE="${CASE}/semver-repo/source"
+# baseline_lacks DIR: how many objects of origin/main's tree DIR lacks.
+baseline_lacks() { git -C "$1" rev-list --objects --missing=print 'origin/main^{tree}' | grep -c '^?'; }
+check "a blobless clone lacks the baseline's files" test "$(baseline_lacks "${CASE}/fx/semver-partial")" -gt 0
+run semver_checks semver-partial baseline_rev=origin/main
+check "a partial clone's baseline_rev passes" succeeded
+check "saying what it lacks" said "This checkout is a partial clone, which lacks"
+check "and where they are fetched from" said "so they are fetched from origin first."
+check "after which it lacks none" test "$(baseline_lacks "${CASE}/fx/semver-partial")" -eq 0
+run semver_checks semver-partial baseline_rev=origin/main
+check "one that lacks nothing fetches nothing" not_said "This checkout is a partial clone"
+git clone -q --filter=blob:none -b feature "file://${SEMVER_SOURCE}" "${CASE}/fx/semver-unreachable"
+git -C "${CASE}/fx/semver-unreachable" remote set-url origin "${CASE}/no-such-origin.git"
+run semver_checks semver-unreachable baseline_rev=origin/main
+check "a partial clone whose remote can't be reached fails" failed
+check "saying why and what to do" said "checkout with method: full"
+check "before cargo-semver-checks runs" not_said "could not be found"
+run semver_checks semver-unreachable baseline_rev=no-such-revision
+check "a revision git can't resolve is left to cargo-semver-checks" called_with cargo-semver-checks --baseline-rev no-such-revision
 run semver_checks semver/current baseline_rev=origin/main baseline_version=0.1.0
 check "refuses two baselines" said "ERROR: Set at most one of baseline_rev, baseline_version and baseline_root"
 run semver_checks semver/current baseline_version=latest
