@@ -80,6 +80,73 @@ for word in ${RQ_EXTRA_ARGS[@]+"${RQ_EXTRA_ARGS[@]}"}; do
 done
 rq_tool cargo-semver-checks
 SEMVER=${RQ_TOOL}
+
+# --- baseline_rev in a partial clone ---
+# cargo-semver-checks reads baseline_rev's files with gix, which can't fetch
+# the objects a partial clone lacks (CircleCI's checkout is blobless by
+# default), so it fails on the first file of the baseline the checkout
+# doesn't have. Those objects are fetched first, the way git fetches them
+# when a command needs them: one request, by object ID, from a promisor
+# remote. A treeless clone takes a second pass, for the blobs of the trees
+# the first one fetched. git rev-list lists them without fetching anything,
+# and the fetch updates no ref. A revision git can't resolve is left to
+# cargo-semver-checks to report.
+complete_baseline() {
+    local tree=$1 remotes=() remote key value pass missing fetched=0 ok
+    if remote=$(git -C "${RQ_WORKSPACE_ROOT}" config --get extensions.partialclone 2> /dev/null) && [[ -n "${remote}" ]]; then
+        remotes+=("${remote}")
+    fi
+    while IFS=' ' read -r key value; do
+        remote=${key#remote.}
+        remote=${remote%.promisor}
+        if [[ "${value}" == true && " ${remotes[*]-} " != *" ${remote} "* ]]; then
+            remotes+=("${remote}")
+        fi
+    done < <(git -C "${RQ_WORKSPACE_ROOT}" config --bool --get-regexp '^remote\..+\.promisor$' 2> /dev/null || true)
+    if [[ ${#remotes[@]} -eq 0 ]]; then
+        return 0
+    fi
+    for pass in 1 2 3 4 5 6; do
+        if ! git -C "${RQ_WORKSPACE_ROOT}" rev-list --objects --missing=print "${tree}" 2> "${RQ_WORK}/rev-list.err" \
+            | sed -n 's/^?//p' > "${RQ_WORK}/missing.txt"; then
+            rq_tail "${RQ_WORK}/rev-list.err" 10
+            echo "ERROR: git rev-list could not list the objects of baseline_rev ${BASELINE_REV} in this partial clone." >&2
+            exit 1
+        fi
+        missing=$(wc -l < "${RQ_WORK}/missing.txt")
+        missing=${missing//[[:space:]]/}
+        if [[ "${missing}" -eq 0 ]]; then
+            return 0
+        fi
+        if [[ "${pass}" -eq 6 ]]; then
+            echo "ERROR: This partial clone still lacks $(rq_plural "${missing}" object objects) of baseline_rev ${BASELINE_REV}" >&2
+            echo "  after ${fetched} were fetched. Check out the whole repository (CircleCI: checkout with method: full)." >&2
+            exit 1
+        fi
+        echo "This checkout is a partial clone, which lacks $(rq_plural "${missing}" object objects) of baseline_rev ${BASELINE_REV}."
+        echo "  cargo-semver-checks reads them with gix, which can't fetch them, so they are fetched from ${remotes[*]} first."
+        ok=false
+        for remote in "${remotes[@]}"; do
+            if GIT_TERMINAL_PROMPT=0 git -C "${RQ_WORKSPACE_ROOT}" -c fetch.negotiationAlgorithm=noop fetch --progress \
+                --no-tags --no-write-fetch-head --recurse-submodules=no --filter=blob:none --stdin "${remote}" \
+                < "${RQ_WORK}/missing.txt"; then
+                ok=true
+                break
+            fi
+        done
+        if [[ "${ok}" != true ]]; then
+            echo "ERROR: git could not fetch the objects of baseline_rev ${BASELINE_REV} this partial clone lacks from" >&2
+            echo "  ${remotes[*]} (above), and cargo-semver-checks can't read the baseline without them. Check out the" >&2
+            echo "  whole repository (CircleCI: checkout with method: full), or give the job access to the remote." >&2
+            exit 1
+        fi
+        fetched=$((fetched + missing))
+    done
+}
+if [[ -n "${BASELINE_REV}" ]] \
+    && BASELINE_TREE=$(git -C "${RQ_WORKSPACE_ROOT}" rev-parse --verify --quiet "${BASELINE_REV}^{tree}" 2> /dev/null); then
+    complete_baseline "${BASELINE_TREE}"
+fi
 RQ_TOOL_VERSION=$(CARGO=${RQ_CARGO} "${SEMVER}" semver-checks --version 2> /dev/null | awk 'NR == 1') || RQ_TOOL_VERSION=""
 
 RQ_ARGS=(semver-checks check-release "${RQ_PACKAGE_ARGS[@]}" ${BASELINE[@]+"${BASELINE[@]}"})
