@@ -27,12 +27,15 @@ parameters:
     default: ""
     description: >
       Base URL of an internal mirror of GitHub releases, such as an
-      Artifactory or Nexus remote repository, to download the cargo tools
-      from instead of https://github.com. It replaces https://github.com in
-      the release URL, so the mirror must serve the same paths. It must be an
+      Artifactory or Nexus remote repository, to download the cargo tools from
+      instead of https://github.com. It replaces https://github.com in the
+      release URL, so the mirror must serve the same paths. It must be an
       https:// URL, without credentials (user:password@) or a query or
       fragment, which would show in the log. What is downloaded is still
-      verified against this orb's checksum table.
+      verified against this orb's checksum table. A mirror that needs a login
+      gets it from the entry for its host in the .netrc file (NETRC, or
+      ~/.netrc), and curl sends it to the mirror alone, never to a host the
+      mirror redirects to.
   rust_download_base_url:
     type: string
     default: ""

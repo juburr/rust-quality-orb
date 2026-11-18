@@ -30,10 +30,13 @@ parameters:
       Base URL of an internal mirror of https://static.rust-lang.org, such as
       an Artifactory or Nexus remote repository. It replaces
       https://static.rust-lang.org in the rustup-init URL, and becomes
-      RUSTUP_DIST_SERVER for the toolchain downloads, here and in later
-      steps, unless RUSTUP_DIST_SERVER is already set. It must be an https://
-      URL, without credentials (user:password@) or a query or fragment, which
-      would show in the log. Environment variables are expanded.
+      RUSTUP_DIST_SERVER for the toolchain downloads, here and in later steps,
+      unless RUSTUP_DIST_SERVER is already set. It must be an https:// URL,
+      without credentials (user:password@) or a query or fragment, which would
+      show in the log. A mirror that needs a login gets it from the entry for
+      its host in the .netrc file (NETRC, or ~/.netrc), and curl sends it to
+      the mirror alone, never to a host the mirror redirects to. Environment
+      variables are expanded.
   install_path:
     type: string
     default: ""
