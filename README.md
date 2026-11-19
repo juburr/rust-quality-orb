@@ -101,7 +101,7 @@ flowchart LR
 version: 2.1
 
 orbs:
-  rust-quality: juburr/rust-quality-orb@0.1.2
+  rust-quality: juburr/rust-quality-orb@0.2.0
 
 jobs:
   quality:
@@ -137,13 +137,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: juburr/rust-quality-orb/actions/install@v0.1.2
+      - uses: juburr/rust-quality-orb/actions/install@v0.2.0
         with:
           tools: rust cargo-nextest
-      - uses: juburr/rust-quality-orb/actions/fmt@v0.1.2
-      - uses: juburr/rust-quality-orb/actions/lint@v0.1.2
-      - uses: juburr/rust-quality-orb/actions/docs@v0.1.2
-      - uses: juburr/rust-quality-orb/actions/test@v0.1.2
+      - uses: juburr/rust-quality-orb/actions/fmt@v0.2.0
+      - uses: juburr/rust-quality-orb/actions/lint@v0.2.0
+      - uses: juburr/rust-quality-orb/actions/docs@v0.2.0
+      - uses: juburr/rust-quality-orb/actions/test@v0.2.0
 ```
 
 Each check writes its reports to `/tmp/rust-quality-reports` and stores them as artifacts, even when it fails. See [GitHub Actions](#-github-actions) for how the actions map to the orb's commands.
@@ -293,7 +293,7 @@ Installs the tools named in `tools`, each verified against the orb's checksum ta
 | `rust_install_path` | *(see description)* | With `rust`, the installation's root, default `$HOME/.rust-quality-orb/rust`: it must be missing, hold no files, or be an earlier `install_rust` installation, which it replaces. With `rustup`, rustup's `CARGO_HOME`, default `CARGO_HOME` or `$HOME/.cargo`. |
 | `verify_checksums` | `strict` | `strict`, `known_versions` or `false`, for every tool. See [Checksum Verification](#-checksum-verification). |
 | `caching` | `true` | Cache each tool's verified download between jobs (for Rust, the manifest and component archives), keyed by tool, version, CPU architecture and home directory. A cached file is verified again before it is used. |
-| `download_base_url` | *(empty)* | An `https://` mirror of GitHub releases, for the cargo tools, in place of `https://github.com`, serving the same paths. What it serves is still verified. Credentials (`user:password@`), a query and a fragment are refused, since they would show in the log. |
+| `download_base_url` | *(empty)* | An `https://` mirror of GitHub releases, for the cargo tools, in place of `https://github.com`, serving the same paths. What it serves is still verified. Credentials (`user:password@`), a query and a fragment are refused, since they would show in the log. A mirror that needs a login gets the `.netrc` entry for its host; see [Mirrors That Need a Login](#-mirrors-that-need-a-login). |
 | `rust_download_base_url` | *(empty)* | The same, as a mirror of `https://static.rust-lang.org`, for Rust and rustup. With rustup, it also becomes `RUSTUP_DIST_SERVER` for the toolchains, unless that is set. |
 
 ### `rust-quality/install_<tool>`
@@ -413,24 +413,24 @@ Each of the orb's commands has a GitHub Action of the same name. The actions run
 
 | Action | Orb command |
 | --- | --- |
-| `juburr/rust-quality-orb/actions/install@v0.1.2` | [`rust-quality/install`](#rust-qualityinstall) |
-| `juburr/rust-quality-orb/actions/install_rust@v0.1.2`, `install_rustup`, `install_cargo_nextest`, `install_cargo_llvm_cov`, `install_cargo_hack`, `install_cargo_semver_checks`, `install_cargo_shear` | [`rust-quality/install_<tool>`](#rust-qualityinstall_tool) |
-| `juburr/rust-quality-orb/actions/fmt@v0.1.2` | [`rust-quality/fmt`](#rust-qualityfmt) |
-| `juburr/rust-quality-orb/actions/lint@v0.1.2` | [`rust-quality/lint`](#rust-qualitylint) |
-| `juburr/rust-quality-orb/actions/docs@v0.1.2` | [`rust-quality/docs`](#rust-qualitydocs) |
-| `juburr/rust-quality-orb/actions/test@v0.1.2` | [`rust-quality/test`](#rust-qualitytest) |
-| `juburr/rust-quality-orb/actions/coverage@v0.1.2` | [`rust-quality/coverage`](#rust-qualitycoverage) |
-| `juburr/rust-quality-orb/actions/msrv@v0.1.2` | [`rust-quality/msrv`](#rust-qualitymsrv) |
-| `juburr/rust-quality-orb/actions/features@v0.1.2` | [`rust-quality/features`](#rust-qualityfeatures) |
-| `juburr/rust-quality-orb/actions/unused_deps@v0.1.2` | [`rust-quality/unused_deps`](#rust-qualityunused_deps) |
-| `juburr/rust-quality-orb/actions/semver_checks@v0.1.2` | [`rust-quality/semver_checks`](#rust-qualitysemver_checks) |
+| `juburr/rust-quality-orb/actions/install@v0.2.0` | [`rust-quality/install`](#rust-qualityinstall) |
+| `juburr/rust-quality-orb/actions/install_rust@v0.2.0`, `install_rustup`, `install_cargo_nextest`, `install_cargo_llvm_cov`, `install_cargo_hack`, `install_cargo_semver_checks`, `install_cargo_shear` | [`rust-quality/install_<tool>`](#rust-qualityinstall_tool) |
+| `juburr/rust-quality-orb/actions/fmt@v0.2.0` | [`rust-quality/fmt`](#rust-qualityfmt) |
+| `juburr/rust-quality-orb/actions/lint@v0.2.0` | [`rust-quality/lint`](#rust-qualitylint) |
+| `juburr/rust-quality-orb/actions/docs@v0.2.0` | [`rust-quality/docs`](#rust-qualitydocs) |
+| `juburr/rust-quality-orb/actions/test@v0.2.0` | [`rust-quality/test`](#rust-qualitytest) |
+| `juburr/rust-quality-orb/actions/coverage@v0.2.0` | [`rust-quality/coverage`](#rust-qualitycoverage) |
+| `juburr/rust-quality-orb/actions/msrv@v0.2.0` | [`rust-quality/msrv`](#rust-qualitymsrv) |
+| `juburr/rust-quality-orb/actions/features@v0.2.0` | [`rust-quality/features`](#rust-qualityfeatures) |
+| `juburr/rust-quality-orb/actions/unused_deps@v0.2.0` | [`rust-quality/unused_deps`](#rust-qualityunused_deps) |
+| `juburr/rust-quality-orb/actions/semver_checks@v0.2.0` | [`rust-quality/semver_checks`](#rust-qualitysemver_checks) |
 
-The per-tool install actions are `juburr/rust-quality-orb/actions/install_rust@v0.1.2`, `juburr/rust-quality-orb/actions/install_rustup@v0.1.2`, `juburr/rust-quality-orb/actions/install_cargo_nextest@v0.1.2`, `juburr/rust-quality-orb/actions/install_cargo_llvm_cov@v0.1.2`, `juburr/rust-quality-orb/actions/install_cargo_hack@v0.1.2`, `juburr/rust-quality-orb/actions/install_cargo_semver_checks@v0.1.2` and `juburr/rust-quality-orb/actions/install_cargo_shear@v0.1.2`.
+The per-tool install actions are `juburr/rust-quality-orb/actions/install_rust@v0.2.0`, `juburr/rust-quality-orb/actions/install_rustup@v0.2.0`, `juburr/rust-quality-orb/actions/install_cargo_nextest@v0.2.0`, `juburr/rust-quality-orb/actions/install_cargo_llvm_cov@v0.2.0`, `juburr/rust-quality-orb/actions/install_cargo_hack@v0.2.0`, `juburr/rust-quality-orb/actions/install_cargo_semver_checks@v0.2.0` and `juburr/rust-quality-orb/actions/install_cargo_shear@v0.2.0`.
 
 To upload clippy's findings to GitHub code scanning (the job needs `permissions: security-events: write`), point the upload at the SARIF report:
 
 ```yaml
-      - uses: juburr/rust-quality-orb/actions/lint@v0.1.2
+      - uses: juburr/rust-quality-orb/actions/lint@v0.2.0
         with:
           report_only: "true"
       - uses: github/codeql-action/upload-sarif@v4
@@ -441,7 +441,7 @@ To upload clippy's findings to GitHub code scanning (the job needs `permissions:
 
 How they differ from the orb's commands:
 
-- **Versions.** An action is referenced by the repository's release tag, such as `v0.1.2`, the same tag the orb is published from. There is no moving major tag yet. For the strongest pinning, use the tag's commit SHA: `juburr/rust-quality-orb/actions/lint@<sha> # v0.1.2`.
+- **Versions.** An action is referenced by the repository's release tag, such as `v0.2.0`, the same tag the orb is published from. There is no moving major tag yet. For the strongest pinning, use the tag's commit SHA: `juburr/rust-quality-orb/actions/lint@<sha> # v0.2.0`.
 - **Inputs are strings.** Write booleans and numbers quoted, such as `report_only: "true"`.
 - **Environment variables.** The orb expands `$NAME` in its parameters with the CircleCI CLI, which GitHub's runners don't have, so the actions take values as they are. Use GitHub's expressions instead, such as `rust_version: ${{ vars.RUST_RELEASE }}`.
 - **Splitting tests.** `partition` reads CircleCI's `CIRCLE_NODE_TOTAL` and `CIRCLE_NODE_INDEX`. On GitHub, set them in the job's `env` from a matrix to split the tests the same way.
@@ -491,6 +491,30 @@ A run record is a JSON document, described by [`schemas/run-record.v1.json`](sch
 Linux executors and runners on `x86_64` (amd64) and `aarch64`/`arm64` (arm64), including CircleCI [Arm resource classes](https://circleci.com/docs/using-arm/) and GitHub's `ubuntu-24.04-arm` runners. macOS and Windows aren't supported yet: `install` fails on them rather than install a binary that can't run. CI runs every command on `cimg/rust:1.99.1` (Docker, amd64) with the pinned Rust and with the image's rustup, installs rustup on `cimg/base`, installs and runs the checks on an Arm Docker executor and on a machine executor without Rust, and runs every action on GitHub's amd64 and arm64 runners.
 
 The scripts need bash 4 or newer, `jq`, `awk`, `tar`, `gzip`, `curl` or `wget`, and the standard coreutils, including `mktemp`, `sha256sum` and `sha512sum`; `install_rust` uses `xz` when it is there, for smaller downloads. Building Rust code needs a C compiler to link with: cimg/rust, CircleCI's machine images and GitHub's runners have one.
+
+## 🔑 Mirrors That Need a Login
+
+`download_base_url` points the install at an internal mirror, such as an Artifactory remote repository. When the mirror needs a login, the install takes it from the entry for the mirror's host in the `.netrc` file (`NETRC`, or `~/.netrc`), which an earlier step writes, such as from a context's variables. Artifactory takes an access token as the password.
+
+```yaml
+- run:
+    name: Log In to the Mirror
+    command: |
+      umask 077
+      printf 'machine %s login %s password %s\n' artifactory.example.com "${ARTIFACTORY_USER}" "${ARTIFACTORY_TOKEN}" >> ~/.netrc
+```
+
+`printf` is a shell builtin, so the token never reaches a command line.
+
+How the login is kept to the mirror:
+
+- **One entry, in a private file.** The install copies the first complete entry for the mirror's host, alone, into a file only the job's user can read, and gives that file to curl. curl never reads the rest of your `.netrc`: not a `default` entry, not an entry without a password (curl 7.76.0 to 8.11.1 could send a password on to a host the server redirects to, CVE-2024-11053 and CVE-2025-0167, when the `.netrc` held either), and not a token for another host, such as `github.com`.
+- **Only for the mirror.** curl gets the file only for URLs under the mirror. Downloads from anywhere else get no login.
+- **Never past a redirect.** When the mirror redirects a download to another host, such as the cloud storage an Artifactory keeps its files in, that host gets no login, even when a `~/.curlrc` says `location-trusted`.
+- **curl only.** wget reads every entry in `~/.netrc` and can't be limited to one, so an install that would send a mirror login with wget fails and asks for curl.
+- **Out of the log.** The log names the `.netrc` file and the host, never the login. A `.netrc` other users can read is reported.
+
+An entry the install can't use as curl would, one without a login or password or with a quoted value, is reported, and the mirror is then asked without a login. A mirror that refuses a download without one is reported with the entry it needs.
 
 ## 🔐 Checksum Verification
 

@@ -22,7 +22,9 @@ inputs:
       so the mirror must serve the same path. It must be an https:// URL,
       without credentials (user:password@) or a query or fragment, which would
       show in the log. What is downloaded is still verified against this orb's
-      checksum table.
+      checksum table. A mirror that needs a login gets it from the entry for
+      its host in the .netrc file (NETRC, or ~/.netrc), and curl sends it to
+      the mirror alone, never to a host the mirror redirects to.
     default: ""
   install_path:
     description: >
